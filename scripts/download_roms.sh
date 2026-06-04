@@ -51,7 +51,7 @@ extract_archive_once() {
         *.zip)
             unzip -o "$archive" -d "$dest_dir" && touch "$marker"
             ;;
-        *.7z)
+        *.7z|*.rar)
             7z x "$archive" -o"$dest_dir" -y && touch "$marker"
             ;;
         *)
