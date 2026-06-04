@@ -1,12 +1,11 @@
 #!/bin/bash
 
 # Remove local RetroArch configuration.
-# Does not remove ~/retro_setup, ROMs, downloaded cores/BIOS, or the saved selection.
+# Does not remove this repository, ROMs, downloaded cores/BIOS, or the saved selection.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SET_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/retro_setup_common.sh"
 
@@ -46,4 +45,4 @@ for target in "${TARGETS[@]}"; do
     fi
 done
 
-echo "Implode complete. Run ./retro_setup.sh --prepare to recreate the default configuration."
+echo "Implode complete. Run $SET_DIR/retro_setup.sh --prepare to recreate the default configuration."

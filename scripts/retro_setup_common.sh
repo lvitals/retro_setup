@@ -1,7 +1,8 @@
 #!/bin/bash
 
-SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-SET_DIR="${SET_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+RETRO_SETUP_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$RETRO_SETUP_COMMON_DIR"
+SET_DIR="${RETRO_SETUP_DIR:-$(cd "$RETRO_SETUP_COMMON_DIR/.." && pwd)}"
 RA_DIR="${RA_DIR:-$HOME/.config/retroarch}"
 RETRO_SETUP_CONFIG_DIR="${RETRO_SETUP_CONFIG_DIR:-$HOME/.config/retro_setup}"
 RETRO_SETUP_CONFIG="${RETRO_SETUP_CONFIG:-$RETRO_SETUP_CONFIG_DIR/retro_setup.conf}"
@@ -119,7 +120,7 @@ write_selected_platforms() {
     ensure_config_dir
     {
         echo "# Persistent retro_setup configuration"
-        echo "# Edit SELECTED_PLATFORMS or run ./retro_setup.sh --select"
+        echo "# Edit SELECTED_PLATFORMS or run $SET_DIR/retro_setup.sh --select"
         printf "SELECTED_PLATFORMS=("
         local id
         for id in "${SELECTED_PLATFORMS[@]}"; do

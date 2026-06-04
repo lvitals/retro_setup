@@ -5,7 +5,6 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SET_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/retro_setup_common.sh"
 load_url_config

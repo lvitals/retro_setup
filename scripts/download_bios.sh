@@ -1,12 +1,11 @@
 #!/bin/bash
 
 # Download, sync, and verify BIOS files for selected platforms.
-# URLs live in ~/retro_setup/retro_url.config.
+# URLs live in the repository's retro_url.config by default.
 
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SET_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/retro_setup_common.sh"
 

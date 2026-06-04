@@ -1,16 +1,14 @@
 #!/bin/bash
 
 # Script to configure and link RetroArch folders
-# Ensures cores, info files, and BIOS files are installed in the expected absolute paths
+# Ensures cores, info files, and BIOS files are installed in the configured RetroArch paths.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SET_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-RA_DIR="$HOME/.config/retroarch"
-RA_CONFIG="$RA_DIR/retroarch.cfg"
-
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/retro_setup_common.sh"
 selected_platforms_or_all
+
+RA_CONFIG="$RA_DIR/retroarch.cfg"
 
 echo "=== Starting RetroArch Configuration ==="
 

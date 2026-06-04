@@ -8,7 +8,7 @@ SCRIPT_DIR="$SET_DIR/scripts"
 
 usage() {
     cat <<EOF
-Usage: ./retro_setup.sh [command]
+Usage: $0 [command]
 
 Commands:
   --prepare   prepare RetroArch once
