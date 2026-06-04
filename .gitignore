@@ -1,0 +1,57 @@
+# Downloaded binary/content blobs
+/roms/*
+/bios/*
+/cores/*
+/info/*
+!/roms/.gitkeep
+!/bios/.gitkeep
+!/cores/.gitkeep
+!/info/.gitkeep
+
+# RetroArch/download archives and firmware blobs
+*.7z
+*.zip
+*.rar
+*.tar
+*.tar.gz
+*.tgz
+*.xz
+*.iso
+*.chd
+*.cue
+*.bin
+*.rom
+*.n64
+*.z64
+*.v64
+*.gba
+*.gb
+*.gbc
+*.nes
+*.sfc
+*.smc
+*.a26
+*.a52
+*.a78
+*.lnx
+*.gen
+*.sms
+*.gg
+*.32x
+*.pce
+*.ws
+*.wsc
+*.col
+*.int
+*.dsk
+*.rvz
+*.gcm
+*.so
+
+# Runtime/extraction markers
+*.ok
+.extracted.*
+
+# Local scratch/log files
+*.log
+*.tmp
