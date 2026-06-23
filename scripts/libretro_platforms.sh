@@ -56,7 +56,7 @@ declare -A PLATFORM_NAME=(
 )
 
 declare -A PLATFORM_CORE=(
-    [nes]="fceumm_libretro.so|FCEUmm"
+    [nes]="mesen_libretro.so|Nintendo - Nintendo Entertainment System (Mesen)"
     [snes]="snes9x_libretro.so|Snes9x"
     [n64]="mupen64plus_next_libretro.so|Nintendo - Nintendo 64 (Mupen64Plus-Next)"
     [gb]="gambatte_libretro.so|Nintendo - Game Boy / Color (Gambatte)"
