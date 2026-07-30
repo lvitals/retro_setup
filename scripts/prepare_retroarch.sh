@@ -41,19 +41,32 @@ mkdir -p \
 
 if [ ! -f "$RA_CONFIG" ]; then
     echo "retroarch.cfg not found. Generating initial configuration..."
-    timeout 8 retroarch --menu --verbose >/dev/null 2>&1 || true
+    if [ "${RETRO_SETUP_MODE:-}" = "steam" ]; then
+        touch "$RA_CONFIG"
+    else
+        timeout 8 retroarch --menu --verbose >/dev/null 2>&1 || true
+    fi
 fi
 
 if [ -f "$RA_CONFIG" ]; then
     cp "$RA_CONFIG" "$RA_CONFIG.bak"
-    set_config_value libretro_directory "~/.config/retroarch/cores"
-    set_config_value libretro_info_path "~/.config/retroarch/core_info"
-    set_config_value system_directory "~/.config/retroarch/system"
-    set_config_value playlist_directory "~/.config/retroarch/playlists"
-    set_config_value thumbnails_directory "~/.config/retroarch/thumbnails"
+    if [ "${RETRO_SETUP_MODE:-}" = "steam" ]; then
+        set_config_value libretro_directory "$RA_DIR/cores"
+        set_config_value libretro_info_path "$RA_DIR/core_info"
+        set_config_value system_directory "$RA_DIR/system"
+        set_config_value playlist_directory "$RA_DIR/playlists"
+        set_config_value thumbnails_directory "$RA_DIR/thumbnails"
+        set_config_value assets_directory "$RA_DIR/assets"
+    else
+        set_config_value libretro_directory "~/.config/retroarch/cores"
+        set_config_value libretro_info_path "~/.config/retroarch/core_info"
+        set_config_value system_directory "~/.config/retroarch/system"
+        set_config_value playlist_directory "~/.config/retroarch/playlists"
+        set_config_value thumbnails_directory "~/.config/retroarch/thumbnails"
+        set_config_value assets_directory "/usr/share/retroarch/assets"
+    fi
     set_config_value network_on_demand_thumbnails "true"
     set_config_value quick_menu_show_download_thumbnails "true"
-    set_config_value assets_directory "/usr/share/retroarch/assets"
     set_config_value menu_driver "xmb"
     set_config_value xmb_menu_color_theme "4"
     set_config_value xmb_theme "0"

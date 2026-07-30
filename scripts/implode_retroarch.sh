@@ -9,11 +9,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/retro_setup_common.sh"
 
-TARGETS=(
-    "$HOME/.config/retroarch"
-    "$HOME/.cache/retroarch"
-    "$HOME/.local/share/retroarch"
-)
+if [ "${RETRO_SETUP_MODE:-}" = "steam" ]; then
+    TARGETS=(
+        "$RA_DIR/playlists"
+        "$RA_DIR/core_info"
+        "$RA_DIR/thumbnails"
+        "$RA_DIR/retroarch.cfg"
+        "$RA_DIR/retroarch.cfg.bak"
+    )
+else
+    TARGETS=(
+        "$HOME/.config/retroarch"
+        "$HOME/.cache/retroarch"
+        "$HOME/.local/share/retroarch"
+    )
+fi
 
 echo "=== Implode RetroArch ==="
 echo "This removes local RetroArch configuration:"
@@ -45,4 +55,8 @@ for target in "${TARGETS[@]}"; do
     fi
 done
 
-echo "Implode complete. Run $SET_DIR/retro_setup.sh --prepare to recreate the default configuration."
+if [ "${RETRO_SETUP_MODE:-}" = "steam" ]; then
+    echo "Implode complete. Run $SET_DIR/retro_setup_steam.sh --prepare to recreate the default configuration."
+else
+    echo "Implode complete. Run $SET_DIR/retro_setup.sh --prepare to recreate the default configuration."
+fi

@@ -3,9 +3,41 @@
 RETRO_SETUP_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_DIR="$RETRO_SETUP_COMMON_DIR"
 SET_DIR="${RETRO_SETUP_DIR:-$(cd "$RETRO_SETUP_COMMON_DIR/.." && pwd)}"
-RA_DIR="${RA_DIR:-$HOME/.config/retroarch}"
-RETRO_SETUP_CONFIG_DIR="${RETRO_SETUP_CONFIG_DIR:-$HOME/.config/retro_setup}"
-RETRO_SETUP_CONFIG="${RETRO_SETUP_CONFIG:-$RETRO_SETUP_CONFIG_DIR/retro_setup.conf}"
+
+detect_steam_retroarch_dir() {
+    local candidates=(
+        "${STEAM_RA_DIR:-}"
+        "$HOME/.local/share/Steam/steamapps/common/RetroArch"
+        "$HOME/.steam/steam/steamapps/common/RetroArch"
+        "$HOME/.steam/root/steamapps/common/RetroArch"
+        "$HOME/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/common/RetroArch"
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/RetroArch"
+    )
+    local dir
+    for dir in "${candidates[@]}"; do
+        if [ -n "$dir" ] && [ -d "$dir" ] && ( [ -f "$dir/retroarch" ] || [ -f "$dir/retroarch.sh" ] ); then
+            echo "$dir"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if [ "${RETRO_SETUP_MODE:-}" = "steam" ]; then
+    STEAM_RA_DIR="${STEAM_RA_DIR:-$(detect_steam_retroarch_dir || true)}"
+    if [ -n "$STEAM_RA_DIR" ]; then
+        RA_DIR="$STEAM_RA_DIR"
+    else
+        RA_DIR="${RA_DIR:-$HOME/.local/share/Steam/steamapps/common/RetroArch}"
+    fi
+    RETRO_SETUP_CONFIG_DIR="${RETRO_SETUP_CONFIG_DIR:-$HOME/.config/retro_setup}"
+    RETRO_SETUP_CONFIG="${RETRO_SETUP_CONFIG:-$RETRO_SETUP_CONFIG_DIR/retro_setup_steam.conf}"
+else
+    RA_DIR="${RA_DIR:-$HOME/.config/retroarch}"
+    RETRO_SETUP_CONFIG_DIR="${RETRO_SETUP_CONFIG_DIR:-$HOME/.config/retro_setup}"
+    RETRO_SETUP_CONFIG="${RETRO_SETUP_CONFIG:-$RETRO_SETUP_CONFIG_DIR/retro_setup.conf}"
+fi
+
 RETRO_URL_CONFIG="${RETRO_URL_CONFIG:-$SET_DIR/retro_url.config}"
 ROM_SOURCES_FILE="${ROM_SOURCES_FILE:-$RETRO_URL_CONFIG}"
 ROM_BASE_DIR="${ROM_BASE_DIR:-$SET_DIR/roms}"
@@ -106,7 +138,14 @@ install_tool_package() {
 }
 
 ensure_retroarch_dependencies() {
-    install_tool_package retroarch retroarch retroarch retroarch retroarch retroarch
+    if [ "${RETRO_SETUP_MODE:-}" = "steam" ]; then
+        if [ ! -d "$RA_DIR" ] || ( [ ! -f "$RA_DIR/retroarch" ] && [ ! -f "$RA_DIR/retroarch.sh" ] ); then
+            echo "ERROR: RetroArch for Steam not found at: $RA_DIR"
+            return 1
+        fi
+    else
+        install_tool_package retroarch retroarch retroarch retroarch retroarch retroarch
+    fi
     install_tool_package wget wget wget wget wget wget
     install_tool_package unzip unzip unzip unzip unzip unzip
     install_tool_package 7z p7zip-full p7zip p7zip p7zip p7zip
