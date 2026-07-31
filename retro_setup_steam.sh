@@ -33,6 +33,7 @@ Commands:
   --prepare   prepare Steam RetroArch once
   --select    select platforms and install everything they need for Steam RetroArch
   --install   continue/re-run installation for saved platforms
+  --uninstall select platforms to remove what was installed for them
   --thumbnails download thumbnails for saved platforms
   --implode   remove retro_setup configuration from Steam RetroArch
   --status    show platforms and configuration files
@@ -71,6 +72,9 @@ case "${1:-}" in
         ;;
     --install)
         install_selected_platforms
+        ;;
+    --uninstall)
+        interactive_uninstall_platforms
         ;;
     --thumbnails)
         selected_platforms_or_all

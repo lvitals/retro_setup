@@ -14,6 +14,7 @@ Commands:
   --prepare   prepare RetroArch once
   --select    select platforms and install everything they need
   --install   continue/re-run installation for saved platforms
+  --uninstall select platforms to remove what was installed for them
   --thumbnails download thumbnails for saved platforms
   --implode   remove local RetroArch configuration
   --status    show platforms and configuration files
@@ -50,6 +51,9 @@ case "${1:-}" in
         ;;
     --install)
         install_selected_platforms
+        ;;
+    --uninstall)
+        interactive_uninstall_platforms
         ;;
     --thumbnails)
         selected_platforms_or_all

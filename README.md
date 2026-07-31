@@ -27,6 +27,7 @@ If you are using RetroArch via **Steam**, use `retro_setup_steam.sh`:
 ./retro_setup_steam.sh --prepare   # prepare Steam RetroArch once
 ./retro_setup_steam.sh --select    # select platforms and install everything for Steam RetroArch
 ./retro_setup_steam.sh --install   # continue/re-run saved platforms
+./retro_setup_steam.sh --uninstall # select platforms to remove what was installed for them
 ./retro_setup_steam.sh --thumbnails # pre-download thumbnails
 ./retro_setup_steam.sh --implode   # remove retro_setup config from Steam RetroArch
 ./retro_setup_steam.sh --status    # show Steam RetroArch location and selected platforms
@@ -44,6 +45,7 @@ STEAM_RA_DIR=/path/to/Steam/steamapps/common/RetroArch ./retro_setup_steam.sh --
 ./retro_setup.sh --prepare   # prepare RetroArch once
 ./retro_setup.sh --select    # select platforms and install everything they need
 ./retro_setup.sh --install   # continue/re-run saved platforms
+./retro_setup.sh --uninstall # select platforms to remove what was installed for them
 ./retro_setup.sh --thumbnails # optionally pre-download thumbnails
 ./retro_setup.sh --implode   # remove local RetroArch configuration
 ./retro_setup.sh --status    # show platforms and configs

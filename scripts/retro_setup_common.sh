@@ -380,3 +380,194 @@ interactive_select_platforms() {
     show_selected_platforms
     echo "URL file: $RETRO_URL_CONFIG"
 }
+
+uninstall_platforms() {
+    local targets=("$@")
+    if [ "${#targets[@]}" -eq 0 ]; then
+        echo "No platforms specified for uninstallation."
+        return 0
+    fi
+
+    load_selected_platforms
+
+    echo "=== Uninstalling Selected Platforms ==="
+
+    local new_selected=()
+    local id target keep
+    for id in "${SELECTED_PLATFORMS[@]}"; do
+        keep=true
+        for target in "${targets[@]}"; do
+            if [ "$id" = "$target" ]; then
+                keep=false
+                break
+            fi
+        done
+        if [ "$keep" = true ]; then
+            new_selected+=("$id")
+        fi
+    done
+    SELECTED_PLATFORMS=("${new_selected[@]}")
+    write_selected_platforms
+
+    for target in "${targets[@]}"; do
+        if ! platform_exists "$target"; then
+            echo "Ignoring unknown platform: $target"
+            continue
+        fi
+
+        echo "------------------------------------------"
+        echo "Uninstalling platform: $target (${PLATFORM_NAME[$target]:-$target})"
+
+        local rom_dir="$ROM_BASE_DIR/$target"
+        if [ -d "$rom_dir" ]; then
+            rm -rf "$rom_dir"
+            echo "  Removed ROMs directory: $rom_dir"
+        fi
+
+        local playlist_file="$RA_DIR/playlists/${PLATFORM_NAME[$target]}.lpl"
+        if [ -f "$playlist_file" ]; then
+            rm -f "$playlist_file"
+            echo "  Removed playlist: $playlist_file"
+        fi
+
+        local thumb_dir="$RA_DIR/thumbnails/${PLATFORM_NAME[$target]}"
+        if [ -d "$thumb_dir" ]; then
+            rm -rf "$thumb_dir"
+            echo "  Removed thumbnails: $thumb_dir"
+        fi
+
+        if [ -n "${PLATFORM_BIOS[$target]:-}" ]; then
+            local bios bios_needed rem_platform rem_bios
+            for bios in ${PLATFORM_BIOS[$target]}; do
+                bios_needed=false
+                for rem_platform in "${SELECTED_PLATFORMS[@]}"; do
+                    if [ -n "${PLATFORM_BIOS[$rem_platform]:-}" ]; then
+                        for rem_bios in ${PLATFORM_BIOS[$rem_platform]}; do
+                            if [ "$rem_bios" = "$bios" ]; then
+                                bios_needed=true
+                                break 2
+                            fi
+                        done
+                    fi
+                done
+
+                if [ "$bios_needed" = false ]; then
+                    if [ -e "$RA_DIR/system/$bios" ]; then
+                        rm -rf "$RA_DIR/system/$bios"
+                        echo "  Removed BIOS from RetroArch system: $bios"
+                    fi
+                    if [ -e "$SET_DIR/bios/$bios" ]; then
+                        rm -rf "$SET_DIR/bios/$bios"
+                        echo "  Removed BIOS from local storage: $bios"
+                    fi
+                    if [ -f "$SET_DIR/bios/$bios.zip" ]; then
+                        rm -f "$SET_DIR/bios/$bios.zip"
+                    fi
+                    if [ -f "$SET_DIR/bios/$bios.7z" ]; then
+                        rm -f "$SET_DIR/bios/$bios.7z"
+                    fi
+                else
+                    echo "  Keeping BIOS (still needed by remaining platform): $bios"
+                fi
+            done
+        fi
+
+        if [ -n "${PLATFORM_CORE[$target]:-}" ]; then
+            local core_file core_name rem_platform rem_core_file rem_core_name core_needed info_file
+            IFS='|' read -r core_file core_name <<< "${PLATFORM_CORE[$target]}"
+            info_file="${core_file%.so}.info"
+
+            core_needed=false
+            for rem_platform in "${SELECTED_PLATFORMS[@]}"; do
+                if [ -n "${PLATFORM_CORE[$rem_platform]:-}" ]; then
+                    IFS='|' read -r rem_core_file rem_core_name <<< "${PLATFORM_CORE[$rem_platform]}"
+                    if [ "$rem_core_file" = "$core_file" ]; then
+                        core_needed=true
+                        break
+                    fi
+                fi
+            done
+
+            if [ "$core_needed" = false ]; then
+                if [ -f "$RA_DIR/cores/$core_file" ]; then
+                    rm -f "$RA_DIR/cores/$core_file"
+                    echo "  Removed core from RetroArch: $core_file"
+                fi
+                if [ -f "$SET_DIR/cores/$core_file" ]; then
+                    rm -f "$SET_DIR/cores/$core_file"
+                    echo "  Removed local core: $core_file"
+                fi
+                if [ -f "$SET_DIR/cores/$core_file.zip" ]; then
+                    rm -f "$SET_DIR/cores/$core_file.zip"
+                fi
+                if [ -f "$RA_DIR/core_info/$info_file" ]; then
+                    rm -f "$RA_DIR/core_info/$info_file"
+                    echo "  Removed core info: $info_file"
+                fi
+                if [ -f "$SET_DIR/info/$info_file" ]; then
+                    rm -f "$SET_DIR/info/$info_file"
+                    echo "  Removed local info: $info_file"
+                fi
+                if [ "${RETRO_SETUP_MODE:-}" = "steam" ] && [ -f "$RA_DIR/cores/$info_file" ]; then
+                    rm -f "$RA_DIR/cores/$info_file"
+                fi
+            else
+                echo "  Keeping core (still needed by remaining platform): $core_file"
+            fi
+        fi
+    done
+
+    echo "------------------------------------------"
+    echo "Uninstallation complete."
+    show_selected_platforms
+}
+
+interactive_uninstall_platforms() {
+    ensure_config_dir
+    load_selected_platforms
+
+    echo "Select platforms to uninstall/remove."
+    echo "Enter numbers separated by commas or spaces, 'all' for all, or press Enter to cancel."
+    echo
+
+    local i=1 id
+    for id in "${PLATFORM_IDS[@]}"; do
+        printf "%2d) [ ] %-16s %s\n" "$i" "$id" "${PLATFORM_NAME[$id]}"
+        i=$((i + 1))
+    done
+
+    echo
+    printf "Selection to uninstall: "
+    read -r answer
+    if [ -z "$answer" ]; then
+        echo "No platform selected for uninstallation. Canceled."
+        return 0
+    fi
+
+    local to_uninstall=()
+    if [ "$answer" = "all" ]; then
+        to_uninstall=("${PLATFORM_IDS[@]}")
+    else
+        local n normalized_answer
+        normalized_answer="${answer//,/ }"
+        for n in $normalized_answer; do
+            if ! [[ "$n" =~ ^[0-9]+$ ]]; then
+                echo "Ignoring invalid entry: $n"
+                continue
+            fi
+            if [ "$n" -lt 1 ] || [ "$n" -gt "${#PLATFORM_IDS[@]}" ]; then
+                echo "Ignoring number outside the list: $n"
+                continue
+            fi
+            to_uninstall+=("${PLATFORM_IDS[$((n - 1))]}")
+        done
+    fi
+
+    if [ "${#to_uninstall[@]}" -eq 0 ]; then
+        echo "No valid platform selected to uninstall."
+        return 0
+    fi
+
+    uninstall_platforms "${to_uninstall[@]}"
+}
+
