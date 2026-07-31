@@ -71,7 +71,7 @@ generate_playlist() {
     while IFS= read -r rom_path; do
         filename="$(basename "$rom_path")"
         case "$filename" in
-            pack.7z|pack.zip|Champion\ Collection*) continue ;;
+            pack.7z|pack.zip|*Champion*|*.download|*.extracted.*) continue ;;
         esac
         has_valid_extension "$filename" "$extensions" || continue
 
