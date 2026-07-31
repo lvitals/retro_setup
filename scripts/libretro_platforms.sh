@@ -4,7 +4,7 @@
 # Mantem id, playlist RetroArch, core, extensoes, BIOS e observacoes em um lugar.
 
 PLATFORM_IDS=(
-    nes snes n64 gb gbc gba fds satellaview gamecube
+    nes snes n64 gb gbc gba fds satellaview gamecube ps1
     mastersystem gamegear megadrive sega32x segacd sg1000 saturn
     neogeo neogeocd neogeopocket neogeopocketcolor
     msx msx2 msxturbor
@@ -23,6 +23,7 @@ declare -A PLATFORM_NAME=(
     [fds]="Nintendo - Famicom Disk System"
     [satellaview]="Nintendo - Satellaview"
     [gamecube]="Nintendo - GameCube"
+    [ps1]="Sony - PlayStation"
     [mastersystem]="Sega - Master System - Mark III"
     [gamegear]="Sega - Game Gear"
     [megadrive]="Sega - Mega Drive - Genesis"
@@ -65,6 +66,7 @@ declare -A PLATFORM_CORE=(
     [fds]="fceumm_libretro.so|Nintendo - NES / Famicom (FCEUmm)"
     [satellaview]="snes9x_libretro.so|Snes9x"
     [gamecube]="dolphin_libretro.so|Nintendo - GameCube / Wii (Dolphin)"
+    [ps1]="pcsx_rearmed_libretro.so|Sony - PlayStation (PCSX ReARMed)"
     [mastersystem]="genesis_plus_gx_libretro.so|Sega - MS/GG/MD/CD (Genesis Plus GX)"
     [gamegear]="genesis_plus_gx_libretro.so|Sega - MS/GG/MD/CD (Genesis Plus GX)"
     [megadrive]="genesis_plus_gx_libretro.so|Sega - MS/GG/MD/CD (Genesis Plus GX)"
@@ -99,7 +101,7 @@ declare -A PLATFORM_CORE=(
 
 declare -A PLATFORM_EXTENSIONS=(
     [nes]="nes" [snes]="sfc smc" [n64]="n64 z64 v64" [gb]="gb" [gbc]="gbc" [gba]="gba"
-    [fds]="fds" [satellaview]="bs" [gamecube]="iso gcm rvz"
+    [fds]="fds" [satellaview]="bs" [gamecube]="iso gcm rvz" [ps1]="chd cue iso bin pbp"
     [mastersystem]="sms" [gamegear]="gg" [megadrive]="md gen bin" [sega32x]="32x"
     [segacd]="chd cue iso" [sg1000]="sg" [saturn]="chd cue iso"
     [neogeo]="zip" [neogeocd]="chd cue iso" [neogeopocket]="ngp" [neogeopocketcolor]="ngc"
@@ -113,6 +115,9 @@ declare -A PLATFORM_EXTENSIONS=(
 
 declare -A PLATFORM_BIOS=(
     [fds]="disksys.rom"
+    [ps1]="scph5500.bin scph5501.bin scph5502.bin"
+    [atomiswave]="dc/awbios.zip"
+    [flycast]="dc/naomi.zip"
     [segacd]="bios_CD_U.bin bios_CD_E.bin bios_CD_J.bin"
     [saturn]="saturn_bios.bin mpr-17933.bin sega_101.bin"
     [neogeo]="neogeo.zip"

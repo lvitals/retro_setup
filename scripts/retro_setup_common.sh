@@ -249,6 +249,24 @@ copy_selected_bios() {
             fi
         done
     done
+
+    if [ ! -f "$dst_dir/neocd.bin" ]; then
+        if [ -f "$dst_dir/sp-45.sp1" ]; then
+            cp "$dst_dir/sp-45.sp1" "$dst_dir/neocd.bin"
+            echo "BIOS alias: sp-45.sp1 -> neocd.bin"
+        elif [ -f "$dst_dir/sp-j3.sp1" ]; then
+            cp "$dst_dir/sp-j3.sp1" "$dst_dir/neocd.bin"
+            echo "BIOS alias: sp-j3.sp1 -> neocd.bin"
+        fi
+    fi
+
+    if [ ! -f "$src_dir/neocd.bin" ]; then
+        if [ -f "$src_dir/sp-45.sp1" ]; then
+            cp "$src_dir/sp-45.sp1" "$src_dir/neocd.bin"
+        elif [ -f "$src_dir/sp-j3.sp1" ]; then
+            cp "$src_dir/sp-j3.sp1" "$src_dir/neocd.bin"
+        fi
+    fi
 }
 
 check_selected_bios() {
@@ -302,10 +320,12 @@ download_selected_core_assets() {
 
     if [ "$needs_info" = true ]; then
         echo "Downloading core info..."
+        local info_zip="$SET_DIR/info/retroarch-core-info.zip"
+        [ -s "$info_zip" ] || rm -f "$info_zip"
         wget --continue --tries=10 --waitretry=5 --retry-connrefused \
-            "${CORE_INFO_URL:-https://buildbot.libretro.com/assets/frontend/bundle/retroarch-core-info.zip}" \
-            -O "$SET_DIR/info/retroarch-core-info.zip" --show-progress &&
-            unzip -o "$SET_DIR/info/retroarch-core-info.zip" -d "$SET_DIR/info"
+            "${CORE_INFO_URL:-https://buildbot.libretro.com/assets/frontend/info.zip}" \
+            -O "$info_zip" --show-progress &&
+            unzip -o "$info_zip" -d "$SET_DIR/info"
     fi
 
     for platform in "${SELECTED_PLATFORMS[@]}"; do
