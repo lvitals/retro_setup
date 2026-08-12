@@ -8,19 +8,54 @@
 static UrlArrayEntry g_entries[MAX_ENTRIES];
 static int g_entry_count = 0;
 
-static void clean_token(char* out, size_t out_size, const char* in) {
-    if (!out || out_size == 0) return;
-    if (!in) { out[0] = 0; return; }
+static void extract_urls_for_key(const char* key, const char* str) {
+    if (!key || !*key || !str || !*str) return;
 
-    const char* p = in;
-    while (*p == ' ' || *p == '\t' || *p == '"' || *p == '\'') p++;
-
-    size_t pos = 0;
-    while (*p && pos < out_size - 1) {
-        if (*p == '"' || *p == '\'' || *p == '\n' || *p == '\r') break;
-        out[pos++] = *p++;
+    // Find existing key entry or create new
+    int entry_idx = -1;
+    for (int i = 0; i < g_entry_count; i++) {
+        if (strcmp(g_entries[i].key, key) == 0) {
+            entry_idx = i;
+            break;
+        }
     }
-    out[pos] = 0;
+    if (entry_idx < 0) {
+        if (g_entry_count >= MAX_ENTRIES) return;
+        entry_idx = g_entry_count++;
+        snprintf(g_entries[entry_idx].key, sizeof(g_entries[entry_idx].key), "%s", key);
+        g_entries[entry_idx].url_count = 0;
+    }
+
+    const char* p = str;
+    while (*p) {
+        const char* http = strstr(p, "http");
+        if (!http) break;
+
+        char clean_url[MAX_URL_LEN];
+        size_t ulen = 0;
+        const char* q = http;
+        while (*q && *q != '"' && *q != '\'' && *q != ' ' && *q != '\t' && *q != ')' && *q != '\r' && *q != '\n') {
+            if (ulen < MAX_URL_LEN - 1) {
+                clean_url[ulen++] = *q;
+            }
+            q++;
+        }
+        clean_url[ulen] = 0;
+
+        if (clean_url[0] && g_entries[entry_idx].url_count < MAX_URLS_PER_KEY) {
+            bool dup = false;
+            for (int k = 0; k < g_entries[entry_idx].url_count; k++) {
+                if (strcmp(g_entries[entry_idx].urls[k], clean_url) == 0) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup) {
+                snprintf(g_entries[entry_idx].urls[g_entries[entry_idx].url_count++], MAX_URL_LEN, "%s", clean_url);
+            }
+        }
+        p = q;
+    }
 }
 
 bool url_config_load(const char* filepath) {
@@ -34,34 +69,20 @@ bool url_config_load(const char* filepath) {
     }
 
     char line[4096];
-    char current_array_key[128] = {0};
+    char current_key[128] = {0};
     bool in_array = false;
 
     while (fgets(line, sizeof(line), f)) {
-        // Strip leading whitespace
         char* p = line;
         while (*p == ' ' || *p == '\t') p++;
 
         if (*p == '#' || *p == '\n' || *p == '\r' || *p == 0) continue;
 
         if (in_array) {
+            extract_urls_for_key(current_key, p);
             if (strchr(p, ')')) {
                 in_array = false;
-                current_array_key[0] = 0;
-                continue;
-            }
-
-            char clean_url[MAX_URL_LEN];
-            clean_token(clean_url, sizeof(clean_url), p);
-            if (clean_url[0] && strncmp(clean_url, "http", 4) == 0) {
-                for (int i = 0; i < g_entry_count; i++) {
-                    if (strcmp(g_entries[i].key, current_array_key) == 0) {
-                        if (g_entries[i].url_count < MAX_URLS_PER_KEY) {
-                            snprintf(g_entries[i].urls[g_entries[i].url_count++], MAX_URL_LEN, "%s", clean_url);
-                        }
-                        break;
-                    }
-                }
+                current_key[0] = 0;
             }
             continue;
         }
@@ -70,36 +91,29 @@ bool url_config_load(const char* filepath) {
         if (eq) {
             *eq = 0;
             char key[128];
-            clean_token(key, sizeof(key), p);
+            snprintf(key, sizeof(key), "%.127s", p);
+
+            // Trim trailing space from key
+            size_t klen = strlen(key);
+            while (klen > 0 && (key[klen - 1] == ' ' || key[klen - 1] == '\t')) key[--klen] = 0;
+
             char* val = eq + 1;
             while (*val == ' ' || *val == '\t') val++;
 
             if (*val == '(') {
-                // Bash array start
-                in_array = true;
-                snprintf(current_array_key, sizeof(current_array_key), "%s", key);
-
-                if (g_entry_count < MAX_ENTRIES) {
-                    snprintf(g_entries[g_entry_count].key, sizeof(g_entries[g_entry_count].key), "%s", key);
-                    g_entries[g_entry_count].url_count = 0;
-                    g_entry_count++;
-                }
+                // Bash array syntax: key=( ... )
+                snprintf(current_key, sizeof(current_key), "%s", key);
+                extract_urls_for_key(current_key, val);
 
                 if (strchr(val, ')')) {
                     in_array = false;
-                    current_array_key[0] = 0;
+                    current_key[0] = 0;
+                } else {
+                    in_array = true;
                 }
             } else {
                 // Key-value pair
-                char clean_val[MAX_URL_LEN];
-                clean_token(clean_val, sizeof(clean_val), val);
-
-                if (g_entry_count < MAX_ENTRIES) {
-                    snprintf(g_entries[g_entry_count].key, sizeof(g_entries[g_entry_count].key), "%s", key);
-                    snprintf(g_entries[g_entry_count].urls[0], MAX_URL_LEN, "%s", clean_val);
-                    g_entries[g_entry_count].url_count = 1;
-                    g_entry_count++;
-                }
+                extract_urls_for_key(key, val);
             }
         }
     }

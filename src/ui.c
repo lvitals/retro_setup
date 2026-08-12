@@ -581,33 +581,53 @@ static void draw_task_modal(void) {
         font_draw_text_truncated(g_ui.renderer, term_x + 10, ly, log_line, FONT_SCALE_BODY, term_w - 20, line_color.r, line_color.g, line_color.b, 255);
     }
 
-    // Action Button (Close / Cancel) using UIButton component
-    UIButton modal_btn;
-    memset(&modal_btn, 0, sizeof(modal_btn));
-    modal_btn.scale = FONT_SCALE_BODY;
-
-    if (task_is_finished()) {
-        modal_btn.shortcut = "[ENTER]";
-        modal_btn.label = "CLOSE";
-        modal_btn.bg_color = COLOR_SUCCESS;
-    } else {
-        modal_btn.shortcut = "[ESC]";
-        modal_btn.label = "CANCEL";
-        modal_btn.bg_color = COLOR_ERROR;
-    }
-
-    ui_button_measure(&modal_btn, 160, 38);
-
-    int btn_x = modal_x + (modal_w - modal_btn.rect.w) / 2;
-    int btn_y = modal_y + modal_h - 50;
-    modal_btn.rect.x = btn_x;
-    modal_btn.rect.y = btn_y;
-
+    // Action Buttons (Pause / Resume / Cancel / Close)
     int mx, my;
     SDL_GetMouseState(&mx, &my);
-    modal_btn.hovered = ui_button_hit_test(&modal_btn, mx, my);
 
-    ui_button_draw(g_ui.renderer, &modal_btn);
+    if (task_is_finished()) {
+        UIButton modal_btn;
+        memset(&modal_btn, 0, sizeof(modal_btn));
+        modal_btn.shortcut = "[ENTER]";
+        modal_btn.label = "CLOSE";
+        modal_btn.scale = FONT_SCALE_BODY;
+        modal_btn.bg_color = COLOR_SUCCESS;
+        ui_button_measure(&modal_btn, 160, 38);
+        modal_btn.rect.x = modal_x + (modal_w - modal_btn.rect.w) / 2;
+        modal_btn.rect.y = modal_y + modal_h - 50;
+        modal_btn.hovered = ui_button_hit_test(&modal_btn, mx, my);
+        ui_button_draw(g_ui.renderer, &modal_btn);
+    } else {
+        UIButton pause_btn;
+        memset(&pause_btn, 0, sizeof(pause_btn));
+        pause_btn.shortcut = "[P]";
+        pause_btn.label = task_is_paused() ? "RESUME" : "PAUSE";
+        pause_btn.scale = FONT_SCALE_BODY;
+        pause_btn.bg_color = task_is_paused() ? COLOR_SUCCESS : COLOR_WARNING;
+        ui_button_measure(&pause_btn, 140, 38);
+
+        UIButton cancel_btn;
+        memset(&cancel_btn, 0, sizeof(cancel_btn));
+        cancel_btn.shortcut = "[ESC]";
+        cancel_btn.label = "CANCEL";
+        cancel_btn.scale = FONT_SCALE_BODY;
+        cancel_btn.bg_color = COLOR_ERROR;
+        ui_button_measure(&cancel_btn, 140, 38);
+
+        int total_w = pause_btn.rect.w + 20 + cancel_btn.rect.w;
+        int bx = modal_x + (modal_w - total_w) / 2;
+        int by = modal_y + modal_h - 50;
+
+        pause_btn.rect.x = bx;
+        pause_btn.rect.y = by;
+        pause_btn.hovered = ui_button_hit_test(&pause_btn, mx, my);
+        ui_button_draw(g_ui.renderer, &pause_btn);
+
+        cancel_btn.rect.x = bx + pause_btn.rect.w + 20;
+        cancel_btn.rect.y = by;
+        cancel_btn.hovered = ui_button_hit_test(&cancel_btn, mx, my);
+        ui_button_draw(g_ui.renderer, &cancel_btn);
+    }
 }
 
 static void draw_system_status_view(void) {
@@ -875,9 +895,14 @@ static void handle_events(void) {
                 if (task_is_finished() && (key == SDLK_RETURN || key == SDLK_ESCAPE || key == SDLK_SPACE)) {
                     g_ui.view = VIEW_MAIN_MENU;
                     audio_play_sound(SOUND_SELECT);
-                } else if (!task_is_finished() && key == SDLK_ESCAPE) {
-                    task_cancel();
-                    audio_play_sound(SOUND_BACK);
+                } else if (!task_is_finished()) {
+                    if (key == SDLK_p) {
+                        task_toggle_pause();
+                        audio_play_sound(SOUND_TOGGLE);
+                    } else if (key == SDLK_ESCAPE) {
+                        task_cancel();
+                        audio_play_sound(SOUND_BACK);
+                    }
                 }
                 continue;
             }
@@ -1252,25 +1277,48 @@ static void handle_events(void) {
                 int modal_x = 40;
                 int modal_y = 50;
 
-                UIButton modal_btn;
-                memset(&modal_btn, 0, sizeof(modal_btn));
-                modal_btn.scale = FONT_SCALE_BODY;
                 if (task_is_finished()) {
-                    modal_btn.shortcut = "[ENTER]";
-                    modal_btn.label = "CLOSE";
-                } else {
-                    modal_btn.shortcut = "[ESC]";
-                    modal_btn.label = "CANCEL";
-                }
-                ui_button_measure(&modal_btn, 160, 38);
-                modal_btn.rect.x = modal_x + (modal_w - modal_btn.rect.w) / 2;
-                modal_btn.rect.y = modal_y + modal_h - 50;
+                    UIButton close_btn;
+                    memset(&close_btn, 0, sizeof(close_btn));
+                    close_btn.shortcut = "[ENTER]";
+                    close_btn.label = "CLOSE";
+                    close_btn.scale = FONT_SCALE_BODY;
+                    ui_button_measure(&close_btn, 160, 38);
+                    close_btn.rect.x = modal_x + (modal_w - close_btn.rect.w) / 2;
+                    close_btn.rect.y = modal_y + modal_h - 50;
 
-                if (ui_button_hit_test(&modal_btn, mx, my)) {
-                    if (task_is_finished()) {
+                    if (ui_button_hit_test(&close_btn, mx, my)) {
                         g_ui.view = VIEW_MAIN_MENU;
                         audio_play_sound(SOUND_SELECT);
-                    } else {
+                    }
+                } else {
+                    UIButton pause_btn;
+                    memset(&pause_btn, 0, sizeof(pause_btn));
+                    pause_btn.shortcut = "[P]";
+                    pause_btn.label = task_is_paused() ? "RESUME" : "PAUSE";
+                    pause_btn.scale = FONT_SCALE_BODY;
+                    ui_button_measure(&pause_btn, 140, 38);
+
+                    UIButton cancel_btn;
+                    memset(&cancel_btn, 0, sizeof(cancel_btn));
+                    cancel_btn.shortcut = "[ESC]";
+                    cancel_btn.label = "CANCEL";
+                    cancel_btn.scale = FONT_SCALE_BODY;
+                    ui_button_measure(&cancel_btn, 140, 38);
+
+                    int total_w = pause_btn.rect.w + 20 + cancel_btn.rect.w;
+                    int bx = modal_x + (modal_w - total_w) / 2;
+                    int by = modal_y + modal_h - 50;
+
+                    pause_btn.rect.x = bx;
+                    pause_btn.rect.y = by;
+                    cancel_btn.rect.x = bx + pause_btn.rect.w + 20;
+                    cancel_btn.rect.y = by;
+
+                    if (ui_button_hit_test(&pause_btn, mx, my)) {
+                        task_toggle_pause();
+                        audio_play_sound(SOUND_TOGGLE);
+                    } else if (ui_button_hit_test(&cancel_btn, mx, my)) {
                         task_cancel();
                         audio_play_sound(SOUND_BACK);
                     }

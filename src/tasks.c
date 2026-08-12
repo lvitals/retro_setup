@@ -16,6 +16,7 @@ typedef struct {
     bool is_running;
     bool is_finished;
     bool cancel_requested;
+    bool pause_requested;
     int exit_code;
     float progress;
     char status_message[256];
@@ -57,7 +58,8 @@ static void download_progress_cb(const DownloadResult* result, void* user_data) 
     if (result && result->total_bytes > 0) {
         g_task_mgr.progress = (float)result->downloaded_bytes / (float)result->total_bytes;
         snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message),
-                 "Downloading: %.1f MB / %.1f MB (%.0f%%)",
+                 "%s Downloading: %.1f MB / %.1f MB (%.0f%%)",
+                 g_task_mgr.pause_requested ? "[PAUSED]" : "",
                  (double)result->downloaded_bytes / (1024.0 * 1024.0),
                  (double)result->total_bytes / (1024.0 * 1024.0),
                  (double)g_task_mgr.progress * 100.0);
@@ -106,7 +108,6 @@ static int do_task_prepare(void) {
         log_add(LOG_LEVEL_WARN, "Install RetroArch using your distribution package manager when convenient.");
     }
 
-    // Create user RetroArch directories
     log_add(LOG_LEVEL_INFO, "Creating user RetroArch directories at %s...", g_config.ra_dir);
     char dir_cores[MAX_PATH_LEN], dir_info[MAX_PATH_LEN], dir_sys[MAX_PATH_LEN];
     char dir_playlists[MAX_PATH_LEN], dir_thumbs[MAX_PATH_LEN], dir_db[MAX_PATH_LEN];
@@ -127,7 +128,6 @@ static int do_task_prepare(void) {
     fs_mkdir_p(g_config.rom_dir);
     fs_mkdir_p(g_config.config_dir);
 
-    // Download Core Info Zip
     g_task_mgr.progress = 0.3f;
     snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Downloading Libretro Core Info files...");
 
@@ -135,7 +135,7 @@ static int do_task_prepare(void) {
     fs_join_path(info_zip, sizeof(info_zip), g_config.config_dir, "info.zip");
 
     DownloadResult dl_res;
-    if (download_file("https://buildbot.libretro.com/assets/frontend/info.zip", info_zip, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &dl_res)) {
+    if (download_file("https://buildbot.libretro.com/assets/frontend/info.zip", info_zip, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl_res)) {
         log_add(LOG_LEVEL_INFO, "Extracting Core Info files...");
         fs_extract_archive(info_zip, dir_info);
         fs_remove_file(info_zip);
@@ -158,11 +158,13 @@ static int do_task_install(void) {
         return 1;
     }
 
-    // Load retro_url.config
     url_config_load(g_config.url_config_file);
 
     int processed = 0;
     for (int i = 0; i < TOTAL_PLATFORMS; i++) {
+        while (g_task_mgr.pause_requested && !g_task_mgr.cancel_requested) {
+            SDL_Delay(100);
+        }
         if (g_task_mgr.cancel_requested) break;
         if (!g_platforms[i].selected) continue;
 
@@ -173,29 +175,33 @@ static int do_task_install(void) {
         log_add(LOG_LEVEL_INFO, "[%d/%d] Processing %s (%s)...", processed, selected_cnt, p->name, p->id);
         snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Installing %s (%d/%d)...", p->name, processed, selected_cnt);
 
-        // 1. Download Core
-        char core_url[1024];
-        snprintf(core_url, sizeof(core_url), "https://buildbot.libretro.com/nightly/linux/x86_64/latest/%s.zip", p->core_file);
-
-        char core_zip[MAX_PATH_LEN];
-        fs_join_path(core_zip, sizeof(core_zip), g_config.config_dir, "core_tmp.zip");
-
+        // 1. Download Core (if not already installed)
         char cores_dir[MAX_PATH_LEN];
         fs_join_path(cores_dir, sizeof(cores_dir), g_config.ra_dir, "cores");
+        char core_target[MAX_PATH_LEN];
+        fs_join_path(core_target, sizeof(core_target), cores_dir, p->core_file);
 
-        DownloadResult dl;
-        if (download_file(core_url, core_zip, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &dl)) {
-            log_add(LOG_LEVEL_INFO, "Extracting core %s...", p->core_file);
-            fs_extract_archive(core_zip, cores_dir);
-            fs_remove_file(core_zip);
+        if (fs_exists(core_target) && fs_file_size(core_target) > 0) {
+            log_add(LOG_LEVEL_INFO, "Core %s already installed, skipping download.", p->core_file);
         } else {
-            snprintf(core_url, sizeof(core_url), "https://buildbot.libretro.com/nightly/linux/x86_64/latest/%s", p->core_file);
-            char core_target[MAX_PATH_LEN];
-            fs_join_path(core_target, sizeof(core_target), cores_dir, p->core_file);
-            download_file(core_url, core_target, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &dl);
+            char core_url[1024];
+            snprintf(core_url, sizeof(core_url), "https://buildbot.libretro.com/nightly/linux/x86_64/latest/%s.zip", p->core_file);
+
+            char core_zip[MAX_PATH_LEN];
+            fs_join_path(core_zip, sizeof(core_zip), g_config.config_dir, "core_tmp.zip");
+
+            DownloadResult dl;
+            if (download_file(core_url, core_zip, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl)) {
+                log_add(LOG_LEVEL_INFO, "Extracting core %s...", p->core_file);
+                fs_extract_archive(core_zip, cores_dir);
+                fs_remove_file(core_zip);
+            } else {
+                snprintf(core_url, sizeof(core_url), "https://buildbot.libretro.com/nightly/linux/x86_64/latest/%s", p->core_file);
+                download_file(core_url, core_target, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl);
+            }
         }
 
-        // 2. Download BIOS if defined in retro_url.config
+        // 2. Download BIOS if defined in retro_url.config (if not already present)
         char bios_key[128];
         snprintf(bios_key, sizeof(bios_key), "BIOS_URLS_%.64s", p->id);
         char bios_urls[MAX_URLS_PER_KEY][MAX_URL_LEN];
@@ -206,6 +212,7 @@ static int do_task_install(void) {
         fs_mkdir_p(sys_dir);
 
         for (int b = 0; b < bios_cnt; b++) {
+            while (g_task_mgr.pause_requested && !g_task_mgr.cancel_requested) SDL_Delay(100);
             if (g_task_mgr.cancel_requested) break;
             char fn[256];
             fs_get_filename(fn, sizeof(fn), bios_urls[b]);
@@ -214,40 +221,72 @@ static int do_task_install(void) {
             char bios_dst[MAX_PATH_LEN];
             fs_join_path(bios_dst, sizeof(bios_dst), sys_dir, fn);
 
+            if (fs_exists(bios_dst) && fs_file_size(bios_dst) > 0) {
+                log_add(LOG_LEVEL_INFO, "BIOS %s already present, skipping download.", fn);
+                continue;
+            }
+
             log_add(LOG_LEVEL_INFO, "Downloading BIOS %s: %s", p->id, fn);
-            if (download_file(bios_urls[b], bios_dst, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &dl)) {
+            DownloadResult dl;
+            if (download_file(bios_urls[b], bios_dst, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl)) {
                 if (strstr(fn, ".zip") || strstr(fn, ".7z")) {
                     fs_extract_archive(bios_dst, sys_dir);
                 }
             }
         }
 
-        // 3. Download ROMs if defined in retro_url.config
+        // 3. Download ROMs if defined in retro_url.config (if not already downloaded/extracted)
+        char rom_urls[MAX_URLS_PER_KEY][MAX_URL_LEN];
+        int rom_cnt = 0;
+
         char rom_key[128];
         snprintf(rom_key, sizeof(rom_key), "ROM_URLS_%.64s", p->id);
-        char rom_urls[MAX_URLS_PER_KEY][MAX_URL_LEN];
-        int rom_cnt = url_config_get_urls(rom_key, rom_urls, MAX_URLS_PER_KEY);
+        rom_cnt += url_config_get_urls(rom_key, rom_urls + rom_cnt, MAX_URLS_PER_KEY - rom_cnt);
 
-        char platform_rom_dir[MAX_PATH_LEN];
-        fs_join_path(platform_rom_dir, sizeof(platform_rom_dir), g_config.rom_dir, p->id);
-        fs_mkdir_p(platform_rom_dir);
+        char rom_dir_key[128];
+        snprintf(rom_dir_key, sizeof(rom_dir_key), "ROM_DIR_URLS_%.64s", p->id);
+        rom_cnt += url_config_get_urls(rom_dir_key, rom_urls + rom_cnt, MAX_URLS_PER_KEY - rom_cnt);
 
-        for (int r = 0; r < rom_cnt; r++) {
-            if (g_task_mgr.cancel_requested) break;
-            char rfn[256];
-            fs_get_filename(rfn, sizeof(rfn), rom_urls[r]);
-            if (!rfn[0]) snprintf(rfn, sizeof(rfn), "%.180s_roms.zip", p->id);
+        if (rom_cnt > 0) {
+            char platform_rom_dir[MAX_PATH_LEN];
+            fs_join_path(platform_rom_dir, sizeof(platform_rom_dir), g_config.rom_dir, p->id);
+            fs_mkdir_p(platform_rom_dir);
 
-            char rom_dst[MAX_PATH_LEN];
-            fs_join_path(rom_dst, sizeof(rom_dst), platform_rom_dir, rfn);
+            for (int r = 0; r < rom_cnt; r++) {
+                while (g_task_mgr.pause_requested && !g_task_mgr.cancel_requested) SDL_Delay(100);
+                if (g_task_mgr.cancel_requested) break;
+                char rfn[256];
+                fs_get_filename(rfn, sizeof(rfn), rom_urls[r]);
+                if (!rfn[0]) snprintf(rfn, sizeof(rfn), "%.180s_roms.zip", p->id);
 
-            log_add(LOG_LEVEL_INFO, "Downloading ROM pack for %s: %s", p->id, rfn);
-            if (download_file(rom_urls[r], rom_dst, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &dl)) {
-                if (strstr(rfn, ".zip") || strstr(rfn, ".7z")) {
-                    log_add(LOG_LEVEL_INFO, "Extracting ROM archive %s...", rfn);
-                    fs_extract_archive(rom_dst, platform_rom_dir);
+                char marker_file[MAX_PATH_LEN];
+                snprintf(marker_file, sizeof(marker_file), "%.1000s/.extracted.%.250s.ok", platform_rom_dir, rfn);
+
+                if (fs_exists(marker_file)) {
+                    log_add(LOG_LEVEL_INFO, "ROM pack %s already extracted for %s, skipping download.", rfn, p->id);
+                    continue;
+                }
+
+                char rom_dst[MAX_PATH_LEN];
+                fs_join_path(rom_dst, sizeof(rom_dst), platform_rom_dir, rfn);
+
+                DownloadResult dl;
+                log_add(LOG_LEVEL_INFO, "Downloading ROM pack for %s: %s", p->id, rfn);
+                if (download_file(rom_urls[r], rom_dst, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl)) {
+                    if (strstr(rfn, ".zip") || strstr(rfn, ".7z") || strstr(rfn, ".rar") || strstr(rfn, ".tar")) {
+                        log_add(LOG_LEVEL_INFO, "Extracting ROM archive %s...", rfn);
+                        if (fs_extract_archive(rom_dst, platform_rom_dir)) {
+                            FILE* mf = fopen(marker_file, "w");
+                            if (mf) {
+                                fprintf(mf, "extracted OK\n");
+                                fclose(mf);
+                            }
+                        }
+                    }
                 }
             }
+        } else {
+            log_add(LOG_LEVEL_WARN, "No ROM URLs configured in retro_url.config for platform %s (%s)", p->name, p->id);
         }
     }
 
@@ -287,19 +326,16 @@ static int do_task_uninstall(void) {
 
         log_add(LOG_LEVEL_INFO, "Uninstalling %s (%s)...", p->name, p->id);
 
-        // 1. Remove ROM directory
         char p_rom_dir[MAX_PATH_LEN];
         fs_join_path(p_rom_dir, sizeof(p_rom_dir), g_config.rom_dir, p->id);
         if (fs_exists(p_rom_dir)) {
             fs_remove_dir_recursive(p_rom_dir, home);
         }
 
-        // 2. Remove Playlist
         char playlist_file[MAX_PATH_LEN];
         snprintf(playlist_file, sizeof(playlist_file), "%.1000s/playlists/%.500s.lpl", g_config.ra_dir, p->name);
         fs_remove_file(playlist_file);
 
-        // 3. Remove Core
         char core_file[MAX_PATH_LEN];
         snprintf(core_file, sizeof(core_file), "%.1000s/cores/%.500s", g_config.ra_dir, p->core_file);
         fs_remove_file(core_file);
@@ -416,6 +452,7 @@ bool task_start_async(TaskType task, const char* extra_args) {
     g_task_mgr.is_running = true;
     g_task_mgr.is_finished = false;
     g_task_mgr.cancel_requested = false;
+    g_task_mgr.pause_requested = false;
     g_task_mgr.exit_code = 0;
     g_task_mgr.progress = 0.0f;
     snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Starting %s...", task_get_title(task));
@@ -438,6 +475,17 @@ void task_cancel(void) {
     }
 }
 
+void task_toggle_pause(void) {
+    if (g_task_mgr.is_running && !g_task_mgr.is_finished) {
+        g_task_mgr.pause_requested = !g_task_mgr.pause_requested;
+        log_add(LOG_LEVEL_INFO, "Task %s by user.", g_task_mgr.pause_requested ? "PAUSED" : "RESUMED");
+    }
+}
+
+bool task_is_paused(void) {
+    return g_task_mgr.pause_requested;
+}
+
 bool task_is_running(void) { return g_task_mgr.is_running; }
 bool task_is_finished(void) { return g_task_mgr.is_finished; }
 int task_get_exit_code(void) { return g_task_mgr.exit_code; }
@@ -450,6 +498,7 @@ int task_run_sync(TaskType task) {
     g_task_mgr.is_running = true;
     g_task_mgr.is_finished = false;
     g_task_mgr.cancel_requested = false;
+    g_task_mgr.pause_requested = false;
 
     int res = 0;
     switch (task) {

@@ -22,6 +22,8 @@ void tasks_cleanup(void);
 // Asynchronous task launch via SDL_CreateThread
 bool task_start_async(TaskType task, const char* extra_args);
 void task_cancel(void);
+void task_toggle_pause(void);
+bool task_is_paused(void);
 
 bool task_is_running(void);
 bool task_is_finished(void);

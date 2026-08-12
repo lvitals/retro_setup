@@ -4,13 +4,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <SDL2/SDL.h>
 
 typedef struct {
     FILE* file;
     DownloadProgressCallback progress_cb;
     void* user_data;
     bool* cancel_flag;
+    bool* pause_flag;
     DownloadResult* result;
+    curl_off_t initial_offset;
 } CurlContext;
 
 static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -26,13 +29,21 @@ static int xferinfo_callback(void* clientp, curl_off_t dltotal, curl_off_t dlnow
     CurlContext* ctx = (CurlContext*)clientp;
 
     if (ctx && ctx->cancel_flag && *(ctx->cancel_flag)) {
-        log_add(LOG_LEVEL_WARN, "Download canceled by user flag.");
-        return 1; // Abort download immediately
+        log_add(LOG_LEVEL_WARN, "Download canceled by user.");
+        return 1;
+    }
+
+    while (ctx && ctx->pause_flag && *(ctx->pause_flag)) {
+        if (ctx->cancel_flag && *(ctx->cancel_flag)) {
+            log_add(LOG_LEVEL_WARN, "Download canceled by user while paused.");
+            return 1;
+        }
+        SDL_Delay(100);
     }
 
     if (ctx && ctx->result) {
-        ctx->result->downloaded_bytes = dlnow;
-        ctx->result->total_bytes = dltotal;
+        ctx->result->downloaded_bytes = ctx->initial_offset + dlnow;
+        ctx->result->total_bytes = ctx->initial_offset + dltotal;
 
         if (ctx->progress_cb) {
             ctx->progress_cb(ctx->result, ctx->user_data);
@@ -55,6 +66,7 @@ bool download_file(
     DownloadProgressCallback progress_cb,
     void* user_data,
     bool* cancel_flag,
+    bool* pause_flag,
     DownloadResult* out_result
 ) {
     if (!url || !destination_path) return false;
@@ -62,7 +74,18 @@ bool download_file(
     DownloadResult local_res;
     memset(&local_res, 0, sizeof(local_res));
 
-    // Ensure parent directory of destination exists
+    // 1. Skip download if destination file already exists and is non-zero
+    int64_t existing_size = (int64_t)fs_file_size(destination_path);
+    if (existing_size > 0) {
+        log_add(LOG_LEVEL_INFO, "File already downloaded: %s", destination_path);
+        local_res.success = 1;
+        local_res.downloaded_bytes = existing_size;
+        local_res.total_bytes = existing_size;
+        local_res.http_status = 200;
+        if (out_result) *out_result = local_res;
+        return true;
+    }
+
     char dst_dir[4096];
     snprintf(dst_dir, sizeof(dst_dir), "%s", destination_path);
     char* slash = strrchr(dst_dir, '/');
@@ -74,7 +97,8 @@ bool download_file(
     char tmp_path[4096];
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", destination_path);
 
-    FILE* f = fopen(tmp_path, "wb");
+    int64_t tmp_size = (int64_t)fs_file_size(tmp_path);
+    FILE* f = fopen(tmp_path, (tmp_size > 0) ? "ab" : "wb");
     if (!f) {
         snprintf(local_res.error, sizeof(local_res.error), "Failed to open temporary file for writing");
         log_add(LOG_LEVEL_ERROR, "Download error: %s (%s)", local_res.error, tmp_path);
@@ -96,7 +120,9 @@ bool download_file(
     ctx.progress_cb = progress_cb;
     ctx.user_data = user_data;
     ctx.cancel_flag = cancel_flag;
+    ctx.pause_flag = pause_flag;
     ctx.result = &local_res;
+    ctx.initial_offset = (curl_off_t)tmp_size;
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -106,9 +132,14 @@ bool download_file(
     curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 600L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "RetroSetup/2.0 (Linux)");
+
+    if (tmp_size > 0) {
+        log_add(LOG_LEVEL_INFO, "Resuming download from byte %ld: %s", (long)tmp_size, destination_path);
+        curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE, (curl_off_t)tmp_size);
+    }
 
     CURLcode res = curl_easy_perform(curl);
     fclose(f);
@@ -119,7 +150,6 @@ bool download_file(
 
     if (res == CURLE_OK && (local_res.http_status == 200 || local_res.http_status == 206)) {
         local_res.success = 1;
-        // Atomic rename of tmp file to destination
         if (rename(tmp_path, destination_path) != 0) {
             fs_copy_file(tmp_path, destination_path);
             fs_remove_file(tmp_path);
@@ -134,7 +164,6 @@ bool download_file(
             snprintf(local_res.error, sizeof(local_res.error), "HTTP Error %ld (%s)", local_res.http_status, curl_easy_strerror(res));
         }
         log_add(LOG_LEVEL_ERROR, "Download failed [%s]: %s", url, local_res.error);
-        fs_remove_file(tmp_path);
         if (out_result) *out_result = local_res;
         return false;
     }

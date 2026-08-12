@@ -24,6 +24,7 @@ bool download_file(
     DownloadProgressCallback progress_cb,
     void* user_data,
     bool* cancel_flag,
+    bool* pause_flag,
     DownloadResult* out_result
 );
 
