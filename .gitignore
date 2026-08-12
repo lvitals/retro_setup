@@ -3,6 +3,7 @@
 /bios/*
 /cores/*
 /info/*
+obj/
 !/roms/.gitkeep
 !/bios/.gitkeep
 !/cores/.gitkeep
