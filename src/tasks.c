@@ -131,11 +131,13 @@ static int do_task_prepare(void) {
     g_task_mgr.progress = 0.3f;
     snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Downloading Libretro Core Info files...");
 
+    const char* info_url = url_config_get_string("CORE_INFO_URL", "https://buildbot.libretro.com/assets/frontend/info.zip");
+
     char info_zip[MAX_PATH_LEN];
     fs_join_path(info_zip, sizeof(info_zip), g_config.config_dir, "info.zip");
 
     DownloadResult dl_res;
-    if (download_file("https://buildbot.libretro.com/assets/frontend/info.zip", info_zip, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl_res)) {
+    if (download_file(info_url, info_zip, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl_res)) {
         log_add(LOG_LEVEL_INFO, "Extracting Core Info files...");
         fs_extract_archive(info_zip, dir_info);
         fs_remove_file(info_zip);
@@ -159,6 +161,8 @@ static int do_task_install(void) {
     }
 
     url_config_load(g_config.url_config_file);
+
+    const char* core_base_url = url_config_get_string("LIBRETRO_CORE_BASE_URL", "https://buildbot.libretro.com/nightly/linux/x86_64/latest");
 
     int processed = 0;
     for (int i = 0; i < TOTAL_PLATFORMS; i++) {
@@ -185,7 +189,7 @@ static int do_task_install(void) {
             log_add(LOG_LEVEL_INFO, "Core %s already installed, skipping download.", p->core_file);
         } else {
             char core_url[1024];
-            snprintf(core_url, sizeof(core_url), "https://buildbot.libretro.com/nightly/linux/x86_64/latest/%s.zip", p->core_file);
+            snprintf(core_url, sizeof(core_url), "%s/%s.zip", core_base_url, p->core_file);
 
             char core_zip[MAX_PATH_LEN];
             fs_join_path(core_zip, sizeof(core_zip), g_config.config_dir, "core_tmp.zip");
@@ -196,7 +200,7 @@ static int do_task_install(void) {
                 fs_extract_archive(core_zip, cores_dir);
                 fs_remove_file(core_zip);
             } else {
-                snprintf(core_url, sizeof(core_url), "https://buildbot.libretro.com/nightly/linux/x86_64/latest/%s", p->core_file);
+                snprintf(core_url, sizeof(core_url), "%s/%s", core_base_url, p->core_file);
                 download_file(core_url, core_target, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl);
             }
         }

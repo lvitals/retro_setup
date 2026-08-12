@@ -112,8 +112,7 @@ bool playlist_generate_for_platform(const PlatformInfo* platform, const char* ra
     int count = 0;
 
     while ((dir = readdir(d)) != NULL) {
-        if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0) continue;
-        if (strstr(dir->d_name, "pack.") || strstr(dir->d_name, "Champion") || strstr(dir->d_name, ".download")) continue;
+        if (dir->d_name[0] == '.' || strstr(dir->d_name, ".download") || strstr(dir->d_name, ".tmp")) continue;
 
         if (!has_valid_extension(dir->d_name, platform->extensions)) continue;
 
