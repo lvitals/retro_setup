@@ -630,6 +630,86 @@ static void draw_task_modal(void) {
     }
 }
 
+static void draw_parallel_prompt_modal(void) {
+    draw_background();
+    draw_header_bar();
+    draw_platform_selector();
+
+    SDL_SetRenderDrawBlendMode(g_ui.renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(g_ui.renderer, 0, 0, 0, 180);
+    SDL_Rect full_rect = { 0, 0, g_ui.window_width, g_ui.window_height };
+    SDL_RenderFillRect(g_ui.renderer, &full_rect);
+
+    int modal_w = 660;
+    int modal_h = 320;
+    int modal_x = (g_ui.window_width - modal_w) / 2;
+    int modal_y = (g_ui.window_height - modal_h) / 2;
+
+    theme_draw_gradient_panel(g_ui.renderer, modal_x, modal_y, modal_w, modal_h, COLOR_BG_PANEL, COLOR_BG_DARK);
+    theme_draw_border_rect(g_ui.renderer, modal_x, modal_y, modal_w, modal_h, 3, COLOR_PRIMARY);
+
+    theme_draw_filled_rect(g_ui.renderer, modal_x + 3, modal_y + 3, modal_w - 6, 40, COLOR_SURFACE_SELECTED);
+    font_draw_text_shadow(g_ui.renderer, modal_x + 16, modal_y + 12, "PARALLEL DOWNLOADS PROMPT", FONT_SCALE_HEADING, COLOR_PRIMARY.r, COLOR_PRIMARY.g, COLOR_PRIMARY.b, 255);
+
+    int sel_cnt = get_selected_count();
+    int max_workers = (g_config.max_parallel_downloads > 0) ? g_config.max_parallel_downloads : 3;
+
+    char msg1[256], msg2[256], msg3[256];
+    snprintf(msg1, sizeof(msg1), "You have selected %d platforms for installation.", sel_cnt);
+    snprintf(msg2, sizeof(msg2), "Would you like to enable multi-threaded parallel downloads?");
+    snprintf(msg3, sizeof(msg3), "(Max %d simultaneous connections to protect server & network limits)", max_workers);
+
+    font_draw_text_shadow(g_ui.renderer, modal_x + 24, modal_y + 65, msg1, FONT_SCALE_BODY, COLOR_TEXT_PRIMARY.r, COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
+    font_draw_text_shadow(g_ui.renderer, modal_x + 24, modal_y + 95, msg2, FONT_SCALE_BODY, COLOR_TEXT_PRIMARY.r, COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
+    font_draw_text_shadow(g_ui.renderer, modal_x + 24, modal_y + 135, msg3, FONT_SCALE_BODY, COLOR_TEXT_MUTED.r, COLOR_TEXT_MUTED.g, COLOR_TEXT_MUTED.b, 255);
+
+    int mx, my;
+    SDL_GetMouseState(&mx, &my);
+    int by = modal_y + modal_h - 60;
+
+    UIButton yes_btn, no_btn, cancel_btn;
+    memset(&yes_btn, 0, sizeof(yes_btn));
+    yes_btn.shortcut = "[Y]";
+    yes_btn.label = "YES (PARALLEL)";
+    yes_btn.scale = FONT_SCALE_BODY;
+    yes_btn.bg_color = COLOR_SUCCESS;
+    ui_button_measure(&yes_btn, 170, 42);
+
+    memset(&no_btn, 0, sizeof(no_btn));
+    no_btn.shortcut = "[N]";
+    no_btn.label = "NO (SEQUENTIAL)";
+    no_btn.scale = FONT_SCALE_BODY;
+    no_btn.bg_color = COLOR_SECONDARY;
+    ui_button_measure(&no_btn, 180, 42);
+
+    memset(&cancel_btn, 0, sizeof(cancel_btn));
+    cancel_btn.shortcut = "[ESC]";
+    cancel_btn.label = "CANCEL";
+    cancel_btn.scale = FONT_SCALE_BODY;
+    cancel_btn.bg_color = COLOR_ERROR;
+    ui_button_measure(&cancel_btn, 120, 42);
+
+    int total_w = yes_btn.rect.w + 14 + no_btn.rect.w + 14 + cancel_btn.rect.w;
+    int bx = modal_x + (modal_w - total_w) / 2;
+
+    yes_btn.rect.x = bx;
+    yes_btn.rect.y = by;
+    yes_btn.hovered = ui_button_hit_test(&yes_btn, mx, my);
+    ui_button_draw(g_ui.renderer, &yes_btn);
+
+    no_btn.rect.x = bx + yes_btn.rect.w + 14;
+    no_btn.rect.y = by;
+    no_btn.hovered = ui_button_hit_test(&no_btn, mx, my);
+    ui_button_draw(g_ui.renderer, &no_btn);
+
+    cancel_btn.rect.x = bx + yes_btn.rect.w + 14 + no_btn.rect.w + 14;
+    cancel_btn.rect.y = by;
+    cancel_btn.hovered = ui_button_hit_test(&cancel_btn, mx, my);
+    ui_button_draw(g_ui.renderer, &cancel_btn);
+
+    draw_footer_bar();
+}
+
 static void draw_system_status_view(void) {
     draw_background();
     draw_header_bar();
@@ -891,6 +971,26 @@ static void handle_events(void) {
                 continue;
             }
 
+            if (g_ui.view == VIEW_PARALLEL_PROMPT) {
+                if (key == SDLK_y) {
+                    g_config.use_parallel_downloads = true;
+                    g_ui.view = VIEW_TASK_RUNNING;
+                    g_ui.modal_task = TASK_INSTALL;
+                    task_start_async(TASK_INSTALL, NULL);
+                    audio_play_sound(SOUND_FANFARE);
+                } else if (key == SDLK_n) {
+                    g_config.use_parallel_downloads = false;
+                    g_ui.view = VIEW_TASK_RUNNING;
+                    g_ui.modal_task = TASK_INSTALL;
+                    task_start_async(TASK_INSTALL, NULL);
+                    audio_play_sound(SOUND_SELECT);
+                } else if (key == SDLK_ESCAPE) {
+                    g_ui.view = VIEW_PLATFORM_SELECT;
+                    audio_play_sound(SOUND_BACK);
+                }
+                continue;
+            }
+
             if (g_ui.view == VIEW_TASK_RUNNING) {
                 if (task_is_finished() && (key == SDLK_RETURN || key == SDLK_ESCAPE || key == SDLK_SPACE)) {
                     g_ui.view = VIEW_MAIN_MENU;
@@ -996,10 +1096,16 @@ static void handle_events(void) {
                     }
                 } else if (key == SDLK_RETURN) {
                     save_selected_platforms_config();
-                    audio_play_sound(SOUND_FANFARE);
-                    g_ui.view = VIEW_TASK_RUNNING;
-                    g_ui.modal_task = TASK_INSTALL;
-                    task_start_async(TASK_INSTALL, NULL);
+                    if (get_selected_count() > 1) {
+                        g_ui.view = VIEW_PARALLEL_PROMPT;
+                        audio_play_sound(SOUND_SELECT);
+                    } else {
+                        g_config.use_parallel_downloads = false;
+                        g_ui.view = VIEW_TASK_RUNNING;
+                        g_ui.modal_task = TASK_INSTALL;
+                        task_start_async(TASK_INSTALL, NULL);
+                        audio_play_sound(SOUND_FANFARE);
+                    }
                 } else if (key == SDLK_ESCAPE) {
                     if (g_ui.search_active || g_ui.search_len > 0) {
                         g_ui.search_active = false;
@@ -1166,6 +1272,15 @@ static void handle_events(void) {
                             g_ui.view = VIEW_STATUS;
                             g_ui.status_scroll_y = 0;
                             diagnostic_run_scan(&g_ui.status_report);
+                        } else if (task == TASK_INSTALL) {
+                            if (get_selected_count() > 1) {
+                                g_ui.view = VIEW_PARALLEL_PROMPT;
+                            } else {
+                                g_config.use_parallel_downloads = false;
+                                g_ui.view = VIEW_TASK_RUNNING;
+                                g_ui.modal_task = task;
+                                task_start_async(task, NULL);
+                            }
                         } else {
                             g_ui.view = VIEW_TASK_RUNNING;
                             g_ui.modal_task = task;
@@ -1173,6 +1288,58 @@ static void handle_events(void) {
                         }
                         break;
                     }
+                }
+            } else if (g_ui.view == VIEW_PARALLEL_PROMPT) {
+                int modal_w = 660;
+                int modal_h = 320;
+                int modal_x = (g_ui.window_width - modal_w) / 2;
+                int modal_y = (g_ui.window_height - modal_h) / 2;
+                int by = modal_y + modal_h - 60;
+
+                UIButton yes_btn, no_btn, cancel_btn;
+                memset(&yes_btn, 0, sizeof(yes_btn));
+                yes_btn.shortcut = "[Y]";
+                yes_btn.label = "YES (PARALLEL)";
+                yes_btn.scale = FONT_SCALE_BODY;
+                ui_button_measure(&yes_btn, 170, 42);
+
+                memset(&no_btn, 0, sizeof(no_btn));
+                no_btn.shortcut = "[N]";
+                no_btn.label = "NO (SEQUENTIAL)";
+                no_btn.scale = FONT_SCALE_BODY;
+                ui_button_measure(&no_btn, 180, 42);
+
+                memset(&cancel_btn, 0, sizeof(cancel_btn));
+                cancel_btn.shortcut = "[ESC]";
+                cancel_btn.label = "CANCEL";
+                cancel_btn.scale = FONT_SCALE_BODY;
+                ui_button_measure(&cancel_btn, 120, 42);
+
+                int total_w = yes_btn.rect.w + 14 + no_btn.rect.w + 14 + cancel_btn.rect.w;
+                int bx = modal_x + (modal_w - total_w) / 2;
+
+                yes_btn.rect.x = bx;
+                yes_btn.rect.y = by;
+                no_btn.rect.x = bx + yes_btn.rect.w + 14;
+                no_btn.rect.y = by;
+                cancel_btn.rect.x = bx + yes_btn.rect.w + 14 + no_btn.rect.w + 14;
+                cancel_btn.rect.y = by;
+
+                if (ui_button_hit_test(&yes_btn, mx, my)) {
+                    g_config.use_parallel_downloads = true;
+                    g_ui.view = VIEW_TASK_RUNNING;
+                    g_ui.modal_task = TASK_INSTALL;
+                    task_start_async(TASK_INSTALL, NULL);
+                    audio_play_sound(SOUND_FANFARE);
+                } else if (ui_button_hit_test(&no_btn, mx, my)) {
+                    g_config.use_parallel_downloads = false;
+                    g_ui.view = VIEW_TASK_RUNNING;
+                    g_ui.modal_task = TASK_INSTALL;
+                    task_start_async(TASK_INSTALL, NULL);
+                    audio_play_sound(SOUND_SELECT);
+                } else if (ui_button_hit_test(&cancel_btn, mx, my)) {
+                    g_ui.view = VIEW_PLATFORM_SELECT;
+                    audio_play_sound(SOUND_BACK);
                 }
             } else if (g_ui.view == VIEW_PLATFORM_SELECT) {
                 int start_y = HEADER_HEIGHT + 10;
@@ -1242,10 +1409,16 @@ static void handle_events(void) {
                             audio_play_sound(SOUND_TOGGLE);
                         } else if (a == 3) {
                             save_selected_platforms_config();
-                            audio_play_sound(SOUND_FANFARE);
-                            g_ui.view = VIEW_TASK_RUNNING;
-                            g_ui.modal_task = TASK_INSTALL;
-                            task_start_async(TASK_INSTALL, NULL);
+                            if (get_selected_count() > 1) {
+                                g_ui.view = VIEW_PARALLEL_PROMPT;
+                                audio_play_sound(SOUND_SELECT);
+                            } else {
+                                g_config.use_parallel_downloads = false;
+                                g_ui.view = VIEW_TASK_RUNNING;
+                                g_ui.modal_task = TASK_INSTALL;
+                                task_start_async(TASK_INSTALL, NULL);
+                                audio_play_sound(SOUND_FANFARE);
+                            }
                         }
                         break;
                     }
@@ -1350,6 +1523,9 @@ void ui_run_main_loop(void) {
             case VIEW_TASK_RUNNING:
                 draw_main_menu();
                 draw_task_modal();
+                break;
+            case VIEW_PARALLEL_PROMPT:
+                draw_parallel_prompt_modal();
                 break;
             default:
                 draw_main_menu();

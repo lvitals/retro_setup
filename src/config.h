@@ -23,6 +23,8 @@ typedef struct {
     char distro_id[64];
     bool audio_enabled;
     bool crt_scanlines;
+    bool use_parallel_downloads;
+    int max_parallel_downloads;
 } AppConfig;
 
 extern AppConfig g_config;

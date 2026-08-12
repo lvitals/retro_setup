@@ -14,7 +14,8 @@ typedef enum {
     VIEW_PLATFORM_SELECT,
     VIEW_UNINSTALL_SELECT,
     VIEW_TASK_RUNNING,
-    VIEW_STATUS
+    VIEW_STATUS,
+    VIEW_PARALLEL_PROMPT
 } UIViewState;
 
 typedef struct {
