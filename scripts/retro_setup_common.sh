@@ -227,7 +227,7 @@ create_rom_sources_file() {
 copy_selected_bios() {
     local src_dir="${1:-$SET_DIR/bios}"
     local dst_dir="${2:-$RA_DIR/system}"
-    local platform bios source found_path
+    local platform bios source found_path dest_path
 
     mkdir -p "$src_dir" "$dst_dir"
 
@@ -244,29 +244,13 @@ copy_selected_bios() {
             fi
 
             if [ -n "$found_path" ]; then
-                cp -R "$found_path" "$dst_dir/"
-                echo "BIOS synced: $platform -> $(basename "$found_path")"
+                dest_path="$dst_dir/$bios"
+                mkdir -p "$(dirname "$dest_path")"
+                cp -f "$found_path" "$dest_path"
+                echo "BIOS synced: $platform -> $bios"
             fi
         done
     done
-
-    if [ ! -f "$dst_dir/neocd.bin" ]; then
-        if [ -f "$dst_dir/sp-45.sp1" ]; then
-            cp "$dst_dir/sp-45.sp1" "$dst_dir/neocd.bin"
-            echo "BIOS alias: sp-45.sp1 -> neocd.bin"
-        elif [ -f "$dst_dir/sp-j3.sp1" ]; then
-            cp "$dst_dir/sp-j3.sp1" "$dst_dir/neocd.bin"
-            echo "BIOS alias: sp-j3.sp1 -> neocd.bin"
-        fi
-    fi
-
-    if [ ! -f "$src_dir/neocd.bin" ]; then
-        if [ -f "$src_dir/sp-45.sp1" ]; then
-            cp "$src_dir/sp-45.sp1" "$src_dir/neocd.bin"
-        elif [ -f "$src_dir/sp-j3.sp1" ]; then
-            cp "$src_dir/sp-j3.sp1" "$src_dir/neocd.bin"
-        fi
-    fi
 }
 
 check_selected_bios() {
