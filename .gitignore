@@ -4,6 +4,7 @@
 /cores/*
 /info/*
 obj/
+retro_setup_gui
 !/roms/.gitkeep
 !/bios/.gitkeep
 !/cores/.gitkeep

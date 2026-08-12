@@ -8,28 +8,30 @@ typedef struct {
     Uint8 r, g, b, a;
 } ThemeColor;
 
-// Centralized Color Tokens
-extern const ThemeColor COLOR_BG_DARK;
-extern const ThemeColor COLOR_BG_PANEL;
-extern const ThemeColor COLOR_SURFACE;
-extern const ThemeColor COLOR_SURFACE_HOVER;
-extern const ThemeColor COLOR_SURFACE_SELECTED;
+// Centralized Color Tokens (Configurable)
+extern ThemeColor COLOR_BG_DARK;
+extern ThemeColor COLOR_BG_PANEL;
+extern ThemeColor COLOR_SURFACE;
+extern ThemeColor COLOR_SURFACE_HOVER;
+extern ThemeColor COLOR_SURFACE_SELECTED;
 
-extern const ThemeColor COLOR_PRIMARY;
-extern const ThemeColor COLOR_SECONDARY;
-extern const ThemeColor COLOR_SUCCESS;
-extern const ThemeColor COLOR_WARNING;
-extern const ThemeColor COLOR_ERROR;
-extern const ThemeColor COLOR_INFO;
+extern ThemeColor COLOR_PRIMARY;
+extern ThemeColor COLOR_SECONDARY;
+extern ThemeColor COLOR_SUCCESS;
+extern ThemeColor COLOR_WARNING;
+extern ThemeColor COLOR_ERROR;
+extern ThemeColor COLOR_INFO;
 
-extern const ThemeColor COLOR_TEXT_PRIMARY;
-extern const ThemeColor COLOR_TEXT_SECONDARY;
-extern const ThemeColor COLOR_TEXT_MUTED;
-extern const ThemeColor COLOR_TEXT_HIGHLIGHT;
+extern ThemeColor COLOR_TEXT_PRIMARY;
+extern ThemeColor COLOR_TEXT_SECONDARY;
+extern ThemeColor COLOR_TEXT_MUTED;
+extern ThemeColor COLOR_TEXT_HIGHLIGHT;
 
-extern const ThemeColor COLOR_BORDER_DEFAULT;
-extern const ThemeColor COLOR_BORDER_FOCUS;
-extern const ThemeColor COLOR_BORDER_ACCENT;
+extern ThemeColor COLOR_BORDER_DEFAULT;
+extern ThemeColor COLOR_BORDER_FOCUS;
+extern ThemeColor COLOR_BORDER_ACCENT;
+
+void theme_load_config(const char* filepath);
 
 // Centralized Layout & Dimension Tokens
 #define MARGIN_CONTAINER 20

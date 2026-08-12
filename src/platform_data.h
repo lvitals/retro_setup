@@ -3,38 +3,40 @@
 
 #include <stdbool.h>
 
-typedef enum {
-    MFR_ALL = 0,
-    MFR_NINTENDO,
-    MFR_SONY,
-    MFR_SEGA,
-    MFR_SNK,
-    MFR_ARCADE,
-    MFR_ATARI,
-    MFR_OTHER,
-    MFR_COUNT
-} ManufacturerCategory;
+#define MAX_CATEGORIES 32
 
 typedef struct {
-    const char* id;
-    const char* name;
-    ManufacturerCategory mfr;
-    const char* core_file;
-    const char* core_name;
-    const char* extensions;
-    const char* bios_files;
-    unsigned int color_hex; // Accent color for UI badge (e.g. 0xE60012 for Nintendo Red)
+    char name[64];
+    unsigned int color_hex;
+} CategoryInfo;
+
+extern CategoryInfo g_categories[MAX_CATEGORIES];
+extern int g_category_count;
+
+typedef struct {
+    char id[64];
+    char name[128];
+    char category[64];
+    char core_file[128];
+    char core_name[128];
+    char extensions[128];
+    char bios_files[256];
+    unsigned int color_hex;
     bool selected;
 } PlatformInfo;
 
-#define TOTAL_PLATFORMS 40
+#define MAX_PLATFORMS 128
 
-extern PlatformInfo g_platforms[TOTAL_PLATFORMS];
+extern PlatformInfo g_platforms[MAX_PLATFORMS];
+extern int g_platform_count;
 
-const char* get_mfr_name(ManufacturerCategory mfr);
-unsigned int get_mfr_color(ManufacturerCategory mfr);
+#define TOTAL_PLATFORMS g_platform_count
+
+void platform_data_init(void);
+void platform_data_load_custom(const char* config_path);
+void platform_data_build_categories(void);
 int get_platform_index_by_id(const char* id);
 void reset_all_selections(bool select_state);
-void select_by_manufacturer(ManufacturerCategory mfr, bool select_state);
+void select_by_category(const char* category_name, bool select_state);
 
 #endif // PLATFORM_DATA_H

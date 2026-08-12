@@ -7,6 +7,8 @@
 #include "config.h"
 #include "tasks.h"
 
+#include "diagnostic.h"
+
 typedef enum {
     VIEW_MAIN_MENU = 0,
     VIEW_PLATFORM_SELECT,
@@ -32,8 +34,11 @@ typedef struct {
     bool search_active;
 
     int scroll_offset;
-    int filtered_indices[TOTAL_PLATFORMS];
+    int filtered_indices[MAX_PLATFORMS];
     int filtered_count;
+
+    int status_scroll_y;
+    SystemDiagnosticReport status_report;
 
     float anim_timer;
     int particle_x[50];

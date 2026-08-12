@@ -197,7 +197,7 @@ static int do_task_install(void) {
 
         // 2. Download BIOS if defined in retro_url.config
         char bios_key[128];
-        snprintf(bios_key, sizeof(bios_key), "BIOS_URLS_%s", p->id);
+        snprintf(bios_key, sizeof(bios_key), "BIOS_URLS_%.64s", p->id);
         char bios_urls[MAX_URLS_PER_KEY][MAX_URL_LEN];
         int bios_cnt = url_config_get_urls(bios_key, bios_urls, MAX_URLS_PER_KEY);
 
@@ -209,7 +209,7 @@ static int do_task_install(void) {
             if (g_task_mgr.cancel_requested) break;
             char fn[256];
             fs_get_filename(fn, sizeof(fn), bios_urls[b]);
-            if (!fn[0]) snprintf(fn, sizeof(fn), "%s_bios.bin", p->id);
+            if (!fn[0]) snprintf(fn, sizeof(fn), "%.180s_bios.bin", p->id);
 
             char bios_dst[MAX_PATH_LEN];
             fs_join_path(bios_dst, sizeof(bios_dst), sys_dir, fn);
@@ -224,7 +224,7 @@ static int do_task_install(void) {
 
         // 3. Download ROMs if defined in retro_url.config
         char rom_key[128];
-        snprintf(rom_key, sizeof(rom_key), "ROM_URLS_%s", p->id);
+        snprintf(rom_key, sizeof(rom_key), "ROM_URLS_%.64s", p->id);
         char rom_urls[MAX_URLS_PER_KEY][MAX_URL_LEN];
         int rom_cnt = url_config_get_urls(rom_key, rom_urls, MAX_URLS_PER_KEY);
 
@@ -236,7 +236,7 @@ static int do_task_install(void) {
             if (g_task_mgr.cancel_requested) break;
             char rfn[256];
             fs_get_filename(rfn, sizeof(rfn), rom_urls[r]);
-            if (!rfn[0]) snprintf(rfn, sizeof(rfn), "%s_roms.zip", p->id);
+            if (!rfn[0]) snprintf(rfn, sizeof(rfn), "%.180s_roms.zip", p->id);
 
             char rom_dst[MAX_PATH_LEN];
             fs_join_path(rom_dst, sizeof(rom_dst), platform_rom_dir, rfn);
@@ -358,21 +358,29 @@ static int do_task_implode(void) {
     return 0;
 }
 
-static int do_task_status(void) {
-    log_add(LOG_LEVEL_INFO, "=== Checking System Status ===");
-    log_add(LOG_LEVEL_INFO, "OS Distribution: %s (%s)", g_config.distro_name, g_config.distro_id);
-    log_add(LOG_LEVEL_INFO, "RetroArch Mode: %s", (g_config.mode == MODE_STEAM) ? "Steam RA" : "Standalone");
-    log_add(LOG_LEVEL_INFO, "RetroArch Target Dir: %s", g_config.ra_dir);
-    log_add(LOG_LEVEL_INFO, "ROM Base Dir: %s", g_config.rom_dir);
-    log_add(LOG_LEVEL_INFO, "Config File: %s", g_config.config_file);
+#include "diagnostic.h"
 
-    int count = get_selected_count();
-    log_add(LOG_LEVEL_INFO, "Selected Platforms Total: %d / %d", count, TOTAL_PLATFORMS);
-    for (int i = 0; i < TOTAL_PLATFORMS; i++) {
-        if (g_platforms[i].selected) {
-            log_add(LOG_LEVEL_INFO, "  - [%s] %s (%s)", g_platforms[i].id, g_platforms[i].name, g_platforms[i].core_file);
-        }
-    }
+static int do_task_status(void) {
+    log_add(LOG_LEVEL_INFO, "=== Checking System Diagnostic Status ===");
+    SystemDiagnosticReport rep;
+    diagnostic_run_scan(&rep);
+
+    log_add(LOG_LEVEL_INFO, "OS Distribution       : %s", rep.os_distro);
+    log_add(LOG_LEVEL_INFO, "Architecture          : %s", rep.os_arch);
+    log_add(LOG_LEVEL_INFO, "Retro Setup Version   : %s", rep.app_version);
+    log_add(LOG_LEVEL_INFO, "RetroArch Binary      : %s (%s)", rep.retroarch_binary_found ? "FOUND" : "NOT FOUND", rep.retroarch_binary_path);
+    log_add(LOG_LEVEL_INFO, "RetroArch Mode        : %s", (g_config.mode == MODE_STEAM) ? "Steam RetroArch" : "Standalone");
+    log_add(LOG_LEVEL_INFO, "Target Directory      : %s", rep.retroarch_target_dir);
+
+    char free_str[128], total_str[128];
+    diagnostic_format_size(rep.disk_free_bytes, free_str, sizeof(free_str));
+    diagnostic_format_size(rep.disk_total_bytes, total_str, sizeof(total_str));
+    log_add(LOG_LEVEL_INFO, "Free Disk Space       : %s free / %s total", free_str, total_str);
+
+    log_add(LOG_LEVEL_INFO, "Cores Installed       : %d (%d info files)", rep.cores_installed_count, rep.core_info_count);
+    log_add(LOG_LEVEL_INFO, "System BIOS Files     : %d found, %d missing", rep.bios_found_total, rep.bios_missing_total);
+    log_add(LOG_LEVEL_INFO, "ROM Library Files     : %d files", rep.rom_files_total);
+    log_add(LOG_LEVEL_INFO, "Selected Platforms    : %d / %d (%d Ready, %d Incomplete)", rep.platforms_selected, TOTAL_PLATFORMS, rep.platforms_ready, rep.platforms_incomplete);
 
     g_task_mgr.progress = 1.0f;
     snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Status check complete.");

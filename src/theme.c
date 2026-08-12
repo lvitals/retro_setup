@@ -1,27 +1,77 @@
 #include "theme.h"
 
-// Centralized Color Palette Definitions
-const ThemeColor COLOR_BG_DARK          = { 15,  17,  26, 255 };
-const ThemeColor COLOR_BG_PANEL         = { 25,  30,  48, 255 };
-const ThemeColor COLOR_SURFACE          = { 24,  28,  44, 240 };
-const ThemeColor COLOR_SURFACE_HOVER    = { 35,  42,  64, 255 };
-const ThemeColor COLOR_SURFACE_SELECTED = { 30,  60, 100, 240 };
+// Centralized Color Palette Definitions (Configurable at runtime)
+ThemeColor COLOR_BG_DARK          = { 15,  17,  26, 255 };
+ThemeColor COLOR_BG_PANEL         = { 25,  30,  48, 255 };
+ThemeColor COLOR_SURFACE          = { 24,  28,  44, 240 };
+ThemeColor COLOR_SURFACE_HOVER    = { 35,  42,  64, 255 };
+ThemeColor COLOR_SURFACE_SELECTED = { 30,  60, 100, 240 };
 
-const ThemeColor COLOR_PRIMARY          = {   0, 210, 255, 255 };
-const ThemeColor COLOR_SECONDARY        = {  52, 152, 219, 255 };
-const ThemeColor COLOR_SUCCESS          = {  46, 204, 113, 255 };
-const ThemeColor COLOR_WARNING          = { 241, 196,  15, 255 };
-const ThemeColor COLOR_ERROR            = { 231,  76,  60, 255 };
-const ThemeColor COLOR_INFO             = { 155,  89, 182, 255 };
+ThemeColor COLOR_PRIMARY          = {   0, 210, 255, 255 };
+ThemeColor COLOR_SECONDARY        = {  52, 152, 219, 255 };
+ThemeColor COLOR_SUCCESS          = {  46, 204, 113, 255 };
+ThemeColor COLOR_WARNING          = { 241, 196,  15, 255 };
+ThemeColor COLOR_ERROR            = { 231,  76,  60, 255 };
+ThemeColor COLOR_INFO             = { 155,  89, 182, 255 };
 
-const ThemeColor COLOR_TEXT_PRIMARY     = { 255, 255, 255, 255 };
-const ThemeColor COLOR_TEXT_SECONDARY   = { 170, 200, 230, 255 };
-const ThemeColor COLOR_TEXT_MUTED       = { 120, 140, 165, 255 };
-const ThemeColor COLOR_TEXT_HIGHLIGHT   = {   0, 230, 255, 255 };
+ThemeColor COLOR_TEXT_PRIMARY     = { 255, 255, 255, 255 };
+ThemeColor COLOR_TEXT_SECONDARY   = { 170, 200, 230, 255 };
+ThemeColor COLOR_TEXT_MUTED       = { 120, 140, 165, 255 };
+ThemeColor COLOR_TEXT_HIGHLIGHT   = {   0, 230, 255, 255 };
 
-const ThemeColor COLOR_BORDER_DEFAULT   = {  60,  75, 100, 180 };
-const ThemeColor COLOR_BORDER_FOCUS     = {   0, 220, 255, 255 };
-const ThemeColor COLOR_BORDER_ACCENT    = { 255, 255, 255, 220 };
+ThemeColor COLOR_BORDER_DEFAULT   = {  60,  75, 100, 180 };
+ThemeColor COLOR_BORDER_FOCUS     = {   0, 220, 255, 255 };
+ThemeColor COLOR_BORDER_ACCENT    = { 255, 255, 255, 220 };
+
+static ThemeColor parse_color(const char* str) {
+    ThemeColor c = {0, 0, 0, 255};
+    if (!str || !*str) return c;
+
+    if (str[0] == '0' && (str[1] == 'x' || str[1] == 'X')) {
+        unsigned int val = (unsigned int)strtoul(str, NULL, 0);
+        c.r = (Uint8)((val >> 16) & 0xFF);
+        c.g = (Uint8)((val >> 8) & 0xFF);
+        c.b = (Uint8)(val & 0xFF);
+        c.a = 255;
+    } else {
+        int r = 0, g = 0, b = 0, a = 255;
+        if (sscanf(str, "%d,%d,%d,%d", &r, &g, &b, &a) >= 3) {
+            c.r = (Uint8)r; c.g = (Uint8)g; c.b = (Uint8)b; c.a = (Uint8)a;
+        }
+    }
+    return c;
+}
+
+void theme_load_config(const char* filepath) {
+    if (!filepath) return;
+    FILE* f = fopen(filepath, "r");
+    if (!f) return;
+
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        char* p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || *p == '\r' || *p == '\n' || *p == 0) continue;
+
+        char* eq = strchr(p, '=');
+        if (!eq) continue;
+        *eq = 0;
+        char* val = eq + 1;
+        char* nl = strchr(val, '\r'); if (nl) *nl = 0;
+        nl = strchr(val, '\n'); if (nl) *nl = 0;
+
+        if (strcmp(p, "COLOR_PRIMARY") == 0) COLOR_PRIMARY = parse_color(val);
+        else if (strcmp(p, "COLOR_SECONDARY") == 0) COLOR_SECONDARY = parse_color(val);
+        else if (strcmp(p, "COLOR_SUCCESS") == 0) COLOR_SUCCESS = parse_color(val);
+        else if (strcmp(p, "COLOR_WARNING") == 0) COLOR_WARNING = parse_color(val);
+        else if (strcmp(p, "COLOR_ERROR") == 0) COLOR_ERROR = parse_color(val);
+        else if (strcmp(p, "COLOR_BG_DARK") == 0) COLOR_BG_DARK = parse_color(val);
+        else if (strcmp(p, "COLOR_BG_PANEL") == 0) COLOR_BG_PANEL = parse_color(val);
+        else if (strcmp(p, "COLOR_SURFACE") == 0) COLOR_SURFACE = parse_color(val);
+        else if (strcmp(p, "COLOR_BORDER_FOCUS") == 0) COLOR_BORDER_FOCUS = parse_color(val);
+    }
+    fclose(f);
+}
 
 #include "font.h"
 #include <stdio.h>

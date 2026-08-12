@@ -123,8 +123,10 @@ void ui_update_filtered_platforms(void) {
     g_ui.filtered_count = 0;
 
     for (int i = 0; i < TOTAL_PLATFORMS; i++) {
-        if (g_ui.selected_mfr_tab != MFR_ALL && g_platforms[i].mfr != (ManufacturerCategory)g_ui.selected_mfr_tab) {
-            continue;
+        if (g_ui.selected_mfr_tab > 0 && g_ui.selected_mfr_tab < g_category_count) {
+            if (strcmp(g_platforms[i].category, g_categories[g_ui.selected_mfr_tab].name) != 0) {
+                continue;
+            }
         }
 
         if (g_ui.search_len > 0) {
@@ -362,11 +364,11 @@ static void draw_platform_selector(void) {
     int mx, my;
     SDL_GetMouseState(&mx, &my);
 
-    for (int m = 0; m < MFR_COUNT; m++) {
-        const char* mname = get_mfr_name((ManufacturerCategory)m);
+    for (int c = 0; c < g_category_count; c++) {
+        const char* cname = g_categories[c].name;
         UIButton tab_btn;
         memset(&tab_btn, 0, sizeof(tab_btn));
-        tab_btn.label = mname;
+        tab_btn.label = cname;
         tab_btn.scale = FONT_SCALE_BODY;
 
         ui_button_measure(&tab_btn, 60, tab_h);
@@ -374,11 +376,11 @@ static void draw_platform_selector(void) {
         tab_btn.rect.x = tab_x;
         tab_btn.rect.y = start_y;
 
-        bool active = (g_ui.selected_mfr_tab == m);
-        Uint8 mcolor = get_mfr_color((ManufacturerCategory)m);
-        ThemeColor mtheme = { (Uint8)((mcolor >> 16) & 0xFF), (Uint8)((mcolor >> 8) & 0xFF), (Uint8)(mcolor & 0xFF), 230 };
+        bool active = (g_ui.selected_mfr_tab == c);
+        unsigned int ccolor = g_categories[c].color_hex;
+        ThemeColor ctheme = { (Uint8)((ccolor >> 16) & 0xFF), (Uint8)((ccolor >> 8) & 0xFF), (Uint8)(ccolor & 0xFF), 230 };
 
-        tab_btn.bg_color = active ? mtheme : COLOR_SURFACE;
+        tab_btn.bg_color = active ? ctheme : COLOR_SURFACE;
         tab_btn.hovered = ui_button_hit_test(&tab_btn, mx, my);
         tab_btn.focused = active;
 
@@ -480,12 +482,12 @@ static void draw_platform_selector(void) {
         ThemeColor chk_color = platform->selected ? COLOR_SUCCESS : COLOR_TEXT_MUTED;
         font_draw_text_shadow(g_ui.renderer, item_rect.x + 10, iy + 10, chk, FONT_SCALE_BODY, chk_color.r, chk_color.g, chk_color.b, 255);
 
-        // Manufacturer Pill Badge
-        Uint8 mcolor = get_mfr_color(platform->mfr);
-        ThemeColor mtheme = { (Uint8)((mcolor >> 16) & 0xFF), (Uint8)((mcolor >> 8) & 0xFF), (Uint8)(mcolor & 0xFF), 230 };
+        // Category Pill Badge
+        unsigned int pcolor = platform->color_hex;
+        ThemeColor ptheme = { (Uint8)((pcolor >> 16) & 0xFF), (Uint8)((pcolor >> 8) & 0xFF), (Uint8)(pcolor & 0xFF), 230 };
 
         int pw = (int)strlen(platform->id) * 16 + 16;
-        theme_draw_filled_rect(g_ui.renderer, item_rect.x + 65, iy + 5, pw, 26, mtheme);
+        theme_draw_filled_rect(g_ui.renderer, item_rect.x + 65, iy + 5, pw, 26, ptheme);
         font_draw_text_shadow(g_ui.renderer, item_rect.x + 73, iy + 10, platform->id, FONT_SCALE_BODY, COLOR_TEXT_PRIMARY.r, COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
 
         // Platform Full Name
@@ -608,6 +610,209 @@ static void draw_task_modal(void) {
     ui_button_draw(g_ui.renderer, &modal_btn);
 }
 
+static void draw_system_status_view(void) {
+    draw_background();
+    draw_header_bar();
+
+    int start_y = HEADER_HEIGHT + 10;
+    int content_w = g_ui.window_width - 2 * MARGIN_CONTAINER;
+    int content_h = g_ui.window_height - start_y - FOOTER_HEIGHT - 50;
+
+    // Outer panel container
+    theme_draw_gradient_panel(g_ui.renderer, MARGIN_CONTAINER, start_y, content_w, content_h, COLOR_BG_PANEL, COLOR_BG_DARK);
+    theme_draw_border_rect(g_ui.renderer, MARGIN_CONTAINER, start_y, content_w, content_h, 2, COLOR_PRIMARY);
+
+    // Section Header Subtitle bar
+    char header_subtitle[256];
+    if (g_ui.status_report.overall_health == HEALTH_STATUS_HEALTHY) {
+        snprintf(header_subtitle, sizeof(header_subtitle), "System Health Check: HEALTHY [OK] -- All system components verified.");
+    } else {
+        snprintf(header_subtitle, sizeof(header_subtitle), "System Health Check: WARNING [%d warning(s) found] -- Check detailed report below.", g_ui.status_report.bios_missing_total + g_ui.status_report.platforms_incomplete);
+    }
+    theme_draw_filled_rect(g_ui.renderer, MARGIN_CONTAINER + 2, start_y + 2, content_w - 4, 32, COLOR_SURFACE);
+    font_draw_text_shadow(g_ui.renderer, MARGIN_CONTAINER + 12, start_y + 10, header_subtitle, FONT_SCALE_BODY,
+                          (g_ui.status_report.overall_health == HEALTH_STATUS_HEALTHY) ? COLOR_SUCCESS.r : COLOR_WARNING.r,
+                          (g_ui.status_report.overall_health == HEALTH_STATUS_HEALTHY) ? COLOR_SUCCESS.g : COLOR_WARNING.g,
+                          (g_ui.status_report.overall_health == HEALTH_STATUS_HEALTHY) ? COLOR_SUCCESS.b : COLOR_WARNING.b, 255);
+
+    // Scroll Viewport Clipping setup
+    SDL_Rect viewport = { MARGIN_CONTAINER + 10, start_y + 38, content_w - 20, content_h - 44 };
+    SDL_RenderSetClipRect(g_ui.renderer, &viewport);
+
+    int cur_y = viewport.y - g_ui.status_scroll_y;
+    int left_x = viewport.x + 10;
+    int val_x = left_x + 280;
+
+    SystemDiagnosticReport* rep = &g_ui.status_report;
+
+    #define DRAW_ROW(lbl, val, col) \
+        do { \
+            if (cur_y + 20 >= viewport.y && cur_y <= viewport.y + viewport.h) { \
+                font_draw_text_truncated(g_ui.renderer, left_x, cur_y, (lbl), FONT_SCALE_BODY, 260, COLOR_TEXT_SECONDARY.r, COLOR_TEXT_SECONDARY.g, COLOR_TEXT_SECONDARY.b, 255); \
+                char s_val[512]; \
+                diagnostic_format_path_short((val), s_val, sizeof(s_val)); \
+                font_draw_text_shadow_truncated(g_ui.renderer, val_x, cur_y, s_val, FONT_SCALE_BODY, viewport.w - 300, (col).r, (col).g, (col).b, 255); \
+            } \
+            cur_y += 22; \
+        } while(0)
+
+    #define DRAW_SECTION(title) \
+        do { \
+            cur_y += 8; \
+            if (cur_y + 24 >= viewport.y && cur_y <= viewport.y + viewport.h) { \
+                theme_draw_filled_rect(g_ui.renderer, left_x, cur_y, viewport.w - 20, 24, COLOR_SURFACE_SELECTED); \
+                font_draw_text_shadow(g_ui.renderer, left_x + 8, cur_y + 4, (title), FONT_SCALE_BODY, COLOR_PRIMARY.r, COLOR_PRIMARY.g, COLOR_PRIMARY.b, 255); \
+            } \
+            cur_y += 30; \
+        } while(0)
+
+    // Section 1: System & Retro Setup
+    DRAW_SECTION("=== 1. SYSTEM & RETRO SETUP ===");
+    DRAW_ROW("OS Distribution", rep->os_distro, COLOR_TEXT_PRIMARY);
+    DRAW_ROW("Architecture", rep->os_arch, COLOR_TEXT_PRIMARY);
+    DRAW_ROW("Retro Setup Version", rep->app_version, COLOR_PRIMARY);
+    DRAW_ROW("Setup Engine", "Native C (Autonoma / No Shell)", COLOR_SUCCESS);
+    DRAW_ROW("Home Directory", rep->home_dir, COLOR_TEXT_SECONDARY);
+    DRAW_ROW("Config Directory", rep->config_dir, COLOR_TEXT_SECONDARY);
+    DRAW_ROW("ROM Base Directory", rep->rom_base_dir, COLOR_TEXT_SECONDARY);
+
+    // Section 2: RetroArch Environment
+    DRAW_SECTION("=== 2. RETROARCH ENVIRONMENT ===");
+    DRAW_ROW("RetroArch Binary", rep->retroarch_binary_found ? "FOUND [OK]" : "NOT FOUND [WARNING]", rep->retroarch_binary_found ? COLOR_SUCCESS : COLOR_WARNING);
+    if (rep->retroarch_binary_found) {
+        DRAW_ROW("Binary Path", rep->retroarch_binary_path, COLOR_TEXT_SECONDARY);
+    }
+    DRAW_ROW("Operating Mode", (g_config.mode == MODE_STEAM) ? "Steam RetroArch" : "Standalone RetroArch", COLOR_TEXT_PRIMARY);
+    DRAW_ROW("Target Directory", rep->retroarch_target_dir, COLOR_TEXT_SECONDARY);
+    DRAW_ROW("Configuration File", rep->retroarch_config_found ? "FOUND [OK]" : "MISSING [WARNING]", rep->retroarch_config_found ? COLOR_SUCCESS : COLOR_WARNING);
+    DRAW_ROW("Directory Permissions", (rep->dir_ra_readable && rep->dir_ra_writable) ? "READ / WRITE [OK]" : "READ ONLY / RESTRICTED", (rep->dir_ra_readable && rep->dir_ra_writable) ? COLOR_SUCCESS : COLOR_ERROR);
+
+    // Section 3: Storage & Inventory Stats
+    DRAW_SECTION("=== 3. STORAGE & ASSETS INVENTORY ===");
+    char free_str[128], total_str[128];
+    diagnostic_format_size(rep->disk_free_bytes, free_str, sizeof(free_str));
+    diagnostic_format_size(rep->disk_total_bytes, total_str, sizeof(total_str));
+    char disk_val[256];
+    snprintf(disk_val, sizeof(disk_val), "%.100s free / %.100s total", free_str, total_str);
+    DRAW_ROW("Available Disk Space", disk_val, COLOR_SUCCESS);
+
+    char cores_val[128];
+    snprintf(cores_val, sizeof(cores_val), "%d installed (%d info files)", rep->cores_installed_count, rep->core_info_count);
+    DRAW_ROW("Libretro Cores", cores_val, COLOR_TEXT_PRIMARY);
+
+    char bios_val[128];
+    snprintf(bios_val, sizeof(bios_val), "%d found, %d missing", rep->bios_found_total, rep->bios_missing_total);
+    DRAW_ROW("System BIOS Files", bios_val, (rep->bios_missing_total == 0) ? COLOR_SUCCESS : COLOR_WARNING);
+
+    char roms_sz_str[128];
+    diagnostic_format_size(rep->rom_size_total, roms_sz_str, sizeof(roms_sz_str));
+    char roms_val[256];
+    snprintf(roms_val, sizeof(roms_val), "%d files (%s)", rep->rom_files_total, roms_sz_str);
+    DRAW_ROW("ROM Library Files", roms_val, COLOR_TEXT_PRIMARY);
+
+    char pls_val[128];
+    snprintf(pls_val, sizeof(pls_val), "%d generated .lpl files", rep->playlists_found_total);
+    DRAW_ROW("RetroArch Playlists", pls_val, COLOR_TEXT_PRIMARY);
+
+    char thumbs_sz_str[128];
+    diagnostic_format_size(rep->thumbnails_size_total, thumbs_sz_str, sizeof(thumbs_sz_str));
+    char thumbs_val[256];
+    snprintf(thumbs_val, sizeof(thumbs_val), "%d images (%s)", rep->thumbnails_count_total, thumbs_sz_str);
+    DRAW_ROW("Boxart Thumbnails", thumbs_val, COLOR_TEXT_PRIMARY);
+
+    // Section 4: Selected Platform Diagnostics
+    DRAW_SECTION("=== 4. SELECTED PLATFORMS HEALTH ===");
+    char plat_summary[128];
+    snprintf(plat_summary, sizeof(plat_summary), "%d Selected | %d Ready | %d Incomplete", rep->platforms_selected, rep->platforms_ready, rep->platforms_incomplete);
+    DRAW_ROW("Platforms Summary", plat_summary, (rep->platforms_incomplete == 0) ? COLOR_SUCCESS : COLOR_WARNING);
+
+    for (int p = 0; p < rep->platform_diag_count; p++) {
+        PlatformDiagnostic* pd = &rep->platform_diags[p];
+        char p_title[256];
+        snprintf(p_title, sizeof(p_title), "  [%s] %s", pd->platform->id, pd->platform->name);
+        ThemeColor p_col = (pd->status == PLATFORM_STATUS_READY) ? COLOR_SUCCESS : COLOR_WARNING;
+        DRAW_ROW(p_title, (pd->status == PLATFORM_STATUS_READY) ? "READY [OK]" : "INCOMPLETE [!!]", p_col);
+
+        char detail1[512];
+        snprintf(detail1, sizeof(detail1), "    Core: %s (%s) | BIOS: %d/%d | ROMs: %d",
+                 pd->platform->core_file, pd->core_installed ? "INSTALLED" : "MISSING",
+                 pd->bios_found_count, pd->bios_required_count, pd->rom_count);
+        DRAW_ROW("", detail1, COLOR_TEXT_MUTED);
+
+        if (pd->bios_missing_count > 0) {
+            char detail2[512];
+            snprintf(detail2, sizeof(detail2), "    [!] Missing BIOS: %s", pd->bios_missing_names);
+            DRAW_ROW("", detail2, COLOR_WARNING);
+        }
+    }
+
+    // Section 5: Health Check Summary
+    DRAW_SECTION("=== 5. HEALTH CHECK SUMMARY ===");
+    DRAW_ROW("[OK] OS Distribution & Architecture", "Verified", COLOR_SUCCESS);
+    DRAW_ROW("[OK] Native C Execution Engine", "Active (Zero Shell Subprocesses)", COLOR_SUCCESS);
+    DRAW_ROW(rep->retroarch_binary_found ? "[OK] RetroArch Installation" : "[!!] RetroArch Installation", rep->retroarch_binary_found ? "FOUND" : "NOT FOUND IN PATH", rep->retroarch_binary_found ? COLOR_SUCCESS : COLOR_WARNING);
+    DRAW_ROW(rep->dir_ra_writable ? "[OK] Target Directory Permissions" : "[ERROR] Target Directory Permissions", rep->dir_ra_writable ? "READ/WRITE" : "PERMISSION DENIED", rep->dir_ra_writable ? COLOR_SUCCESS : COLOR_ERROR);
+    DRAW_ROW((rep->bios_missing_total == 0) ? "[OK] System BIOS Files" : "[!!] System BIOS Files", (rep->bios_missing_total == 0) ? "ALL EXPECTED PRESENT" : "SOME REQUIRED MISSING", (rep->bios_missing_total == 0) ? COLOR_SUCCESS : COLOR_WARNING);
+    DRAW_ROW((rep->platforms_incomplete == 0) ? "[OK] Platform Cores & Playlists" : "[!!] Platform Cores & Playlists", (rep->platforms_incomplete == 0) ? "ALL READY" : "INCOMPLETE PLATFORMS DETECTED", (rep->platforms_incomplete == 0) ? COLOR_SUCCESS : COLOR_WARNING);
+
+    cur_y += 20;
+    int total_content_height = cur_y - (viewport.y - g_ui.status_scroll_y);
+
+    SDL_RenderSetClipRect(g_ui.renderer, NULL);
+
+    // Scrollbar indicator
+    int max_scroll = total_content_height - viewport.h;
+    if (max_scroll < 0) max_scroll = 0;
+    if (g_ui.status_scroll_y > max_scroll) g_ui.status_scroll_y = max_scroll;
+    if (g_ui.status_scroll_y < 0) g_ui.status_scroll_y = 0;
+
+    if (max_scroll > 0) {
+        int sb_x = MARGIN_CONTAINER + content_w - 12;
+        int sb_y = viewport.y;
+        int sb_h = viewport.h;
+        theme_draw_filled_rect(g_ui.renderer, sb_x, sb_y, 6, sb_h, COLOR_SURFACE);
+
+        int thumb_h = (int)((float)viewport.h / (float)total_content_height * sb_h);
+        if (thumb_h < 20) thumb_h = 20;
+        int thumb_y = sb_y + (int)((float)g_ui.status_scroll_y / (float)max_scroll * (sb_h - thumb_h));
+        theme_draw_filled_rect(g_ui.renderer, sb_x, thumb_y, 6, thumb_h, COLOR_PRIMARY);
+    }
+
+    // Bottom Action Buttons using UIButton component
+    int btn_y = g_ui.window_height - FOOTER_HEIGHT - 44;
+    int mx, my;
+    SDL_GetMouseState(&mx, &my);
+
+    UIButton ref_btn;
+    memset(&ref_btn, 0, sizeof(ref_btn));
+    ref_btn.shortcut = "[R]";
+    ref_btn.label = "REFRESH";
+    ref_btn.scale = FONT_SCALE_BODY;
+    ref_btn.bg_color = COLOR_SECONDARY;
+    ui_button_measure(&ref_btn, 120, BUTTON_HEIGHT);
+    ref_btn.rect.x = MARGIN_CONTAINER + 20;
+    ref_btn.rect.y = btn_y;
+    ref_btn.hovered = ui_button_hit_test(&ref_btn, mx, my);
+    ui_button_draw(g_ui.renderer, &ref_btn);
+
+    UIButton close_btn;
+    memset(&close_btn, 0, sizeof(close_btn));
+    close_btn.shortcut = "[ENTER]";
+    close_btn.label = "CLOSE";
+    close_btn.scale = FONT_SCALE_BODY;
+    close_btn.bg_color = COLOR_SUCCESS;
+    ui_button_measure(&close_btn, 160, BUTTON_HEIGHT);
+    close_btn.rect.x = g_ui.window_width - MARGIN_CONTAINER - close_btn.rect.w - 20;
+    close_btn.rect.y = btn_y;
+    close_btn.hovered = ui_button_hit_test(&close_btn, mx, my);
+    ui_button_draw(g_ui.renderer, &close_btn);
+
+    draw_footer_bar();
+
+    #undef DRAW_ROW
+    #undef DRAW_SECTION
+}
+
 static void handle_events(void) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
@@ -618,11 +823,51 @@ static void handle_events(void) {
                 g_ui.window_width = e.window.data1;
                 g_ui.window_height = e.window.data2;
             }
+        } else if (e.type == SDL_MOUSEWHEEL) {
+            if (g_ui.view == VIEW_STATUS) {
+                g_ui.status_scroll_y -= e.wheel.y * 36;
+                if (g_ui.status_scroll_y < 0) g_ui.status_scroll_y = 0;
+            }
         } else if (e.type == SDL_KEYDOWN) {
             SDL_Keycode key = e.key.keysym.sym;
 
             if (key == SDLK_s && (e.key.keysym.mod & KMOD_CTRL)) {
                 g_config.audio_enabled = !g_config.audio_enabled;
+                continue;
+            }
+
+            if (key == SDLK_m) {
+                audio_play_sound(SOUND_TOGGLE);
+                set_setup_mode(g_config.mode == MODE_STEAM ? MODE_STANDALONE : MODE_STEAM);
+                load_selected_platforms_config();
+                if (g_ui.view == VIEW_STATUS) {
+                    diagnostic_run_scan(&g_ui.status_report);
+                }
+                continue;
+            }
+
+            if (g_ui.view == VIEW_STATUS) {
+                if (key == SDLK_UP) {
+                    g_ui.status_scroll_y -= 36;
+                    if (g_ui.status_scroll_y < 0) g_ui.status_scroll_y = 0;
+                } else if (key == SDLK_DOWN) {
+                    g_ui.status_scroll_y += 36;
+                } else if (key == SDLK_PAGEUP) {
+                    g_ui.status_scroll_y -= 250;
+                    if (g_ui.status_scroll_y < 0) g_ui.status_scroll_y = 0;
+                } else if (key == SDLK_PAGEDOWN) {
+                    g_ui.status_scroll_y += 250;
+                } else if (key == SDLK_HOME) {
+                    g_ui.status_scroll_y = 0;
+                } else if (key == SDLK_END) {
+                    g_ui.status_scroll_y = 99999;
+                } else if (key == SDLK_r) {
+                    diagnostic_run_scan(&g_ui.status_report);
+                    audio_play_sound(SOUND_TOGGLE);
+                } else if (key == SDLK_RETURN || key == SDLK_ESCAPE) {
+                    g_ui.view = VIEW_MAIN_MENU;
+                    audio_play_sound(SOUND_SELECT);
+                }
                 continue;
             }
 
@@ -633,6 +878,136 @@ static void handle_events(void) {
                 } else if (!task_is_finished() && key == SDLK_ESCAPE) {
                     task_cancel();
                     audio_play_sound(SOUND_BACK);
+                }
+                continue;
+            }
+
+            if (g_ui.view == VIEW_PLATFORM_SELECT) {
+                int start_y = HEADER_HEIGHT + 10;
+                int search_y = start_y + TAB_HEIGHT + 10;
+                int list_y = search_y + BUTTON_HEIGHT + 10 + 22 + 6;
+                int item_h = PLATFORM_ITEM_HEIGHT;
+                int visible_items = (g_ui.window_height - list_y - FOOTER_HEIGHT - 6) / item_h;
+                if (visible_items < 1) visible_items = 1;
+
+                if (key == SDLK_UP) {
+                    if (g_ui.filtered_count > 0) {
+                        g_ui.selected_platform_index--;
+                        if (g_ui.selected_platform_index < 0) {
+                            g_ui.selected_platform_index = g_ui.filtered_count - 1;
+                        }
+                        if (g_ui.selected_platform_index < g_ui.scroll_offset) {
+                            g_ui.scroll_offset = g_ui.selected_platform_index;
+                        } else if (g_ui.selected_platform_index >= g_ui.scroll_offset + visible_items) {
+                            g_ui.scroll_offset = g_ui.selected_platform_index - visible_items + 1;
+                        }
+                        audio_play_sound(SOUND_MOVE);
+                    }
+                } else if (key == SDLK_DOWN) {
+                    if (g_ui.filtered_count > 0) {
+                        g_ui.selected_platform_index++;
+                        if (g_ui.selected_platform_index >= g_ui.filtered_count) {
+                            g_ui.selected_platform_index = 0;
+                        }
+                        if (g_ui.selected_platform_index < g_ui.scroll_offset) {
+                            g_ui.scroll_offset = g_ui.selected_platform_index;
+                        } else if (g_ui.selected_platform_index >= g_ui.scroll_offset + visible_items) {
+                            g_ui.scroll_offset = g_ui.selected_platform_index - visible_items + 1;
+                        }
+                        audio_play_sound(SOUND_MOVE);
+                    }
+                } else if (key == SDLK_PAGEUP) {
+                    if (g_ui.filtered_count > 0) {
+                        g_ui.selected_platform_index -= visible_items;
+                        if (g_ui.selected_platform_index < 0) g_ui.selected_platform_index = 0;
+                        g_ui.scroll_offset = g_ui.selected_platform_index;
+                        audio_play_sound(SOUND_MOVE);
+                    }
+                } else if (key == SDLK_PAGEDOWN) {
+                    if (g_ui.filtered_count > 0) {
+                        g_ui.selected_platform_index += visible_items;
+                        if (g_ui.selected_platform_index >= g_ui.filtered_count) g_ui.selected_platform_index = g_ui.filtered_count - 1;
+                        if (g_ui.selected_platform_index >= g_ui.scroll_offset + visible_items) {
+                            g_ui.scroll_offset = g_ui.selected_platform_index - visible_items + 1;
+                        }
+                        audio_play_sound(SOUND_MOVE);
+                    }
+                } else if (key == SDLK_HOME) {
+                    if (g_ui.filtered_count > 0) {
+                        g_ui.selected_platform_index = 0;
+                        g_ui.scroll_offset = 0;
+                        audio_play_sound(SOUND_MOVE);
+                    }
+                } else if (key == SDLK_END) {
+                    if (g_ui.filtered_count > 0) {
+                        g_ui.selected_platform_index = g_ui.filtered_count - 1;
+                        if (g_ui.selected_platform_index >= visible_items) {
+                            g_ui.scroll_offset = g_ui.selected_platform_index - visible_items + 1;
+                        }
+                        audio_play_sound(SOUND_MOVE);
+                    }
+                } else if (key == SDLK_LEFT) {
+                    if (g_category_count > 0) {
+                        g_ui.selected_mfr_tab = (g_ui.selected_mfr_tab - 1 + g_category_count) % g_category_count;
+                        g_ui.selected_platform_index = 0;
+                        g_ui.scroll_offset = 0;
+                        ui_update_filtered_platforms();
+                        audio_play_sound(SOUND_MOVE);
+                    }
+                } else if (key == SDLK_RIGHT) {
+                    if (g_category_count > 0) {
+                        g_ui.selected_mfr_tab = (g_ui.selected_mfr_tab + 1) % g_category_count;
+                        g_ui.selected_platform_index = 0;
+                        g_ui.scroll_offset = 0;
+                        ui_update_filtered_platforms();
+                        audio_play_sound(SOUND_MOVE);
+                    }
+                } else if (key == SDLK_SPACE) {
+                    if (g_ui.selected_platform_index >= 0 && g_ui.selected_platform_index < g_ui.filtered_count) {
+                        int p_idx = g_ui.filtered_indices[g_ui.selected_platform_index];
+                        g_platforms[p_idx].selected = !g_platforms[p_idx].selected;
+                        save_selected_platforms_config();
+                        audio_play_sound(SOUND_TOGGLE);
+                    }
+                } else if (key == SDLK_RETURN) {
+                    save_selected_platforms_config();
+                    audio_play_sound(SOUND_FANFARE);
+                    g_ui.view = VIEW_TASK_RUNNING;
+                    g_ui.modal_task = TASK_INSTALL;
+                    task_start_async(TASK_INSTALL, NULL);
+                } else if (key == SDLK_ESCAPE) {
+                    if (g_ui.search_active || g_ui.search_len > 0) {
+                        g_ui.search_active = false;
+                        g_ui.search_filter[0] = 0;
+                        g_ui.search_len = 0;
+                        ui_update_filtered_platforms();
+                        audio_play_sound(SOUND_BACK);
+                    } else {
+                        g_ui.view = VIEW_MAIN_MENU;
+                        audio_play_sound(SOUND_BACK);
+                    }
+                } else if (key == SDLK_BACKSPACE) {
+                    if (g_ui.search_len > 0) {
+                        g_ui.search_filter[--g_ui.search_len] = 0;
+                        ui_update_filtered_platforms();
+                        audio_play_sound(SOUND_MOVE);
+                    }
+                } else if (!g_ui.search_active) {
+                    if (key == SDLK_a) {
+                        reset_all_selections(true);
+                        save_selected_platforms_config();
+                        audio_play_sound(SOUND_SELECT);
+                    } else if (key == SDLK_c) {
+                        reset_all_selections(false);
+                        save_selected_platforms_config();
+                        audio_play_sound(SOUND_BACK);
+                    } else if (key == SDLK_i) {
+                        for (int k = 0; k < TOTAL_PLATFORMS; k++) {
+                            g_platforms[k].selected = !g_platforms[k].selected;
+                        }
+                        save_selected_platforms_config();
+                        audio_play_sound(SOUND_TOGGLE);
+                    }
                 }
                 continue;
             }
@@ -651,76 +1026,17 @@ static void handle_events(void) {
                     if (task == TASK_NONE || task == TASK_UNINSTALL) {
                         g_ui.view = VIEW_PLATFORM_SELECT;
                         ui_update_filtered_platforms();
+                    } else if (task == TASK_STATUS) {
+                        g_ui.view = VIEW_STATUS;
+                        g_ui.status_scroll_y = 0;
+                        diagnostic_run_scan(&g_ui.status_report);
                     } else {
                         g_ui.view = VIEW_TASK_RUNNING;
                         g_ui.modal_task = task;
                         task_start_async(task, NULL);
                     }
-                } else if (key == SDLK_m) {
-                    audio_play_sound(SOUND_TOGGLE);
-                    set_setup_mode(g_config.mode == MODE_STEAM ? MODE_STANDALONE : MODE_STEAM);
-                    load_selected_platforms_config();
                 } else if (key == SDLK_q || key == SDLK_ESCAPE) {
                     g_ui.running = false;
-                }
-            } else if (g_ui.view == VIEW_PLATFORM_SELECT) {
-                if (g_ui.search_active) {
-                    if (key == SDLK_ESCAPE || key == SDLK_RETURN) {
-                        g_ui.search_active = false;
-                    } else if (key == SDLK_BACKSPACE) {
-                        if (g_ui.search_len > 0) {
-                            g_ui.search_filter[--g_ui.search_len] = 0;
-                            ui_update_filtered_platforms();
-                        }
-                    }
-                    continue;
-                }
-
-                if (key == SDLK_UP) {
-                    if (g_ui.selected_platform_index > 0) {
-                        g_ui.selected_platform_index--;
-                        audio_play_sound(SOUND_MOVE);
-                    }
-                } else if (key == SDLK_DOWN) {
-                    if (g_ui.selected_platform_index < g_ui.filtered_count - 1) {
-                        g_ui.selected_platform_index++;
-                        audio_play_sound(SOUND_MOVE);
-                    }
-                } else if (key == SDLK_SPACE) {
-                    if (g_ui.filtered_count > 0 && g_ui.selected_platform_index < g_ui.filtered_count) {
-                        int p_idx = g_ui.filtered_indices[g_ui.selected_platform_index];
-                        g_platforms[p_idx].selected = !g_platforms[p_idx].selected;
-                        save_selected_platforms_config();
-                        audio_play_sound(SOUND_TOGGLE);
-                    }
-                } else if (key == SDLK_TAB) {
-                    g_ui.selected_mfr_tab = (g_ui.selected_mfr_tab + 1) % MFR_COUNT;
-                    ui_update_filtered_platforms();
-                    audio_play_sound(SOUND_MOVE);
-                } else if (key == SDLK_a) {
-                    reset_all_selections(true);
-                    save_selected_platforms_config();
-                    audio_play_sound(SOUND_SELECT);
-                } else if (key == SDLK_c) {
-                    reset_all_selections(false);
-                    save_selected_platforms_config();
-                    audio_play_sound(SOUND_BACK);
-                } else if (key == SDLK_i) {
-                    for (int i = 0; i < TOTAL_PLATFORMS; i++) g_platforms[i].selected = !g_platforms[i].selected;
-                    save_selected_platforms_config();
-                    audio_play_sound(SOUND_TOGGLE);
-                } else if (key == SDLK_SLASH || key == SDLK_f) {
-                    g_ui.search_active = true;
-                } else if (key == SDLK_RETURN) {
-                    save_selected_platforms_config();
-                    audio_play_sound(SOUND_FANFARE);
-                    g_ui.view = VIEW_TASK_RUNNING;
-                    g_ui.modal_task = TASK_INSTALL;
-                    task_start_async(TASK_INSTALL, NULL);
-                } else if (key == SDLK_ESCAPE) {
-                    save_selected_platforms_config();
-                    g_ui.view = VIEW_MAIN_MENU;
-                    audio_play_sound(SOUND_BACK);
                 }
             }
         } else if (e.type == SDL_TEXTINPUT) {
@@ -735,19 +1051,7 @@ static void handle_events(void) {
             int mx = e.button.x;
             int my = e.button.y;
 
-            // Footer audio toggle button click
-            int audio_w;
-            font_get_text_size("[AUDIO: ON]", FONT_SCALE_BODY, &audio_w, NULL);
-            int audio_x = g_ui.window_width - audio_w - MARGIN_CONTAINER;
-            int audio_y = g_ui.window_height - FOOTER_HEIGHT;
-            SDL_Rect audio_rect = { audio_x, audio_y, audio_w, FOOTER_HEIGHT };
-            if (is_point_in_rect(mx, my, audio_rect)) {
-                g_config.audio_enabled = !g_config.audio_enabled;
-                audio_play_sound(SOUND_TOGGLE);
-                continue;
-            }
-
-            // Header Mode Button click
+            // 1. Header Mode Button click (Global)
             const char* mode_text = (g_config.mode == MODE_STEAM) ? "STEAM" : "STANDALONE";
             UIButton mode_btn;
             memset(&mode_btn, 0, sizeof(mode_btn));
@@ -763,6 +1067,56 @@ static void handle_events(void) {
                 audio_play_sound(SOUND_TOGGLE);
                 set_setup_mode(g_config.mode == MODE_STEAM ? MODE_STANDALONE : MODE_STEAM);
                 load_selected_platforms_config();
+                if (g_ui.view == VIEW_STATUS) {
+                    diagnostic_run_scan(&g_ui.status_report);
+                }
+                continue;
+            }
+
+            // 2. Footer audio toggle button click (Global)
+            int audio_w;
+            font_get_text_size("[AUDIO: ON]", FONT_SCALE_BODY, &audio_w, NULL);
+            int audio_x = g_ui.window_width - audio_w - MARGIN_CONTAINER;
+            int audio_y = g_ui.window_height - FOOTER_HEIGHT;
+            SDL_Rect audio_rect = { audio_x, audio_y, audio_w, FOOTER_HEIGHT };
+            if (is_point_in_rect(mx, my, audio_rect)) {
+                g_config.audio_enabled = !g_config.audio_enabled;
+                audio_play_sound(SOUND_TOGGLE);
+                continue;
+            }
+
+            // 3. View-specific mouse clicks
+            if (g_ui.view == VIEW_STATUS) {
+                int btn_y = g_ui.window_height - FOOTER_HEIGHT - 44;
+                UIButton ref_btn;
+                memset(&ref_btn, 0, sizeof(ref_btn));
+                ref_btn.shortcut = "[R]";
+                ref_btn.label = "REFRESH";
+                ref_btn.scale = FONT_SCALE_BODY;
+                ui_button_measure(&ref_btn, 120, BUTTON_HEIGHT);
+                ref_btn.rect.x = MARGIN_CONTAINER + 20;
+                ref_btn.rect.y = btn_y;
+
+                if (ui_button_hit_test(&ref_btn, mx, my)) {
+                    diagnostic_run_scan(&g_ui.status_report);
+                    audio_play_sound(SOUND_TOGGLE);
+                    continue;
+                }
+
+                UIButton close_btn;
+                memset(&close_btn, 0, sizeof(close_btn));
+                close_btn.shortcut = "[ENTER]";
+                close_btn.label = "CLOSE";
+                close_btn.scale = FONT_SCALE_BODY;
+                ui_button_measure(&close_btn, 160, BUTTON_HEIGHT);
+                close_btn.rect.x = g_ui.window_width - MARGIN_CONTAINER - close_btn.rect.w - 20;
+                close_btn.rect.y = btn_y;
+
+                if (ui_button_hit_test(&close_btn, mx, my)) {
+                    g_ui.view = VIEW_MAIN_MENU;
+                    audio_play_sound(SOUND_SELECT);
+                    continue;
+                }
                 continue;
             }
 
@@ -783,6 +1137,10 @@ static void handle_events(void) {
                         if (task == TASK_NONE || task == TASK_UNINSTALL) {
                             g_ui.view = VIEW_PLATFORM_SELECT;
                             ui_update_filtered_platforms();
+                        } else if (task == TASK_STATUS) {
+                            g_ui.view = VIEW_STATUS;
+                            g_ui.status_scroll_y = 0;
+                            diagnostic_run_scan(&g_ui.status_report);
                         } else {
                             g_ui.view = VIEW_TASK_RUNNING;
                             g_ui.modal_task = task;
@@ -796,11 +1154,11 @@ static void handle_events(void) {
                 int tab_x = MARGIN_CONTAINER;
                 int tab_h = TAB_HEIGHT;
 
-                for (int m = 0; m < MFR_COUNT; m++) {
-                    const char* mname = get_mfr_name((ManufacturerCategory)m);
+                for (int c = 0; c < g_category_count; c++) {
+                    const char* cname = g_categories[c].name;
                     UIButton tab_btn;
                     memset(&tab_btn, 0, sizeof(tab_btn));
-                    tab_btn.label = mname;
+                    tab_btn.label = cname;
                     tab_btn.scale = FONT_SCALE_BODY;
                     ui_button_measure(&tab_btn, 60, tab_h);
 
@@ -808,7 +1166,7 @@ static void handle_events(void) {
                     tab_btn.rect.y = start_y;
 
                     if (ui_button_hit_test(&tab_btn, mx, my)) {
-                        g_ui.selected_mfr_tab = m;
+                        g_ui.selected_mfr_tab = c;
                         ui_update_filtered_platforms();
                         audio_play_sound(SOUND_MOVE);
                         break;
@@ -937,6 +1295,9 @@ void ui_run_main_loop(void) {
                 break;
             case VIEW_PLATFORM_SELECT:
                 draw_platform_selector();
+                break;
+            case VIEW_STATUS:
+                draw_system_status_view();
                 break;
             case VIEW_TASK_RUNNING:
                 draw_main_menu();

@@ -1,5 +1,7 @@
 #include "config.h"
 #include "platform_data.h"
+#include "theme.h"
+#include "config_url_parser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -130,6 +132,31 @@ void init_config(void) {
     snprintf(g_config.config_dir, sizeof(g_config.config_dir), "%.1000s/.config/retro_setup", home);
     snprintf(g_config.rom_dir, sizeof(g_config.rom_dir), "%.1000s/roms", g_config.repo_dir);
     snprintf(g_config.url_config_file, sizeof(g_config.url_config_file), "%.1000s/retro_url.config", g_config.repo_dir);
+
+    // 1. Initialize empty platform catalog
+    platform_data_init();
+
+    // 2. Load primary platforms catalog dynamically from platforms.config
+    char repo_plat_cfg[MAX_PATH_LEN];
+    snprintf(repo_plat_cfg, sizeof(repo_plat_cfg), "%.1000s/platforms.config", g_config.repo_dir);
+    platform_data_load_custom(repo_plat_cfg);
+
+    // 3. Load download URLs & extra platform entries dynamically from retro_url.config
+    url_config_load(g_config.url_config_file);
+    platform_data_load_custom(g_config.url_config_file);
+
+    // 4. Load user custom platforms config if present (~/.config/retro_setup/platforms.config)
+    char user_plat_cfg[MAX_PATH_LEN];
+    snprintf(user_plat_cfg, sizeof(user_plat_cfg), "%.1000s/platforms.config", g_config.config_dir);
+    platform_data_load_custom(user_plat_cfg);
+
+    // 5. Build dynamic category tabs from loaded platforms
+    platform_data_build_categories();
+
+    // 6. Load custom theme colors from theme.config if present
+    char theme_cfg[MAX_PATH_LEN];
+    snprintf(theme_cfg, sizeof(theme_cfg), "%.1000s/theme.config", g_config.config_dir);
+    theme_load_config(theme_cfg);
 
     // Check environment mode variable
     const char* env_mode = getenv("RETRO_SETUP_MODE");
