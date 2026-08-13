@@ -30,6 +30,94 @@ static TaskManager g_task_mgr;
 
 static void download_progress_cb(const DownloadResult* result, void* user_data);
 
+static bool ensure_core_info_for_selected(void) {
+    char info_dir[MAX_PATH_LEN];
+    fs_join_path(info_dir, sizeof(info_dir), g_config.ra_dir, "core_info");
+    fs_mkdir_p(info_dir);
+    bool missing = false;
+    for (int i = 0; i < TOTAL_PLATFORMS; ++i) {
+        if (!g_platforms[i].selected) continue;
+        char name[160], path[MAX_PATH_LEN];
+        snprintf(name, sizeof(name), "%s", g_platforms[i].core_file);
+        char* suffix = strstr(name, ".so");
+        if (suffix) snprintf(suffix, sizeof(name) - (size_t)(suffix - name), ".info");
+        fs_join_path(path, sizeof(path), info_dir, name);
+        if (!fs_exists(path)) { missing = true; break; }
+    }
+    if (!missing) return true;
+
+    const char* url = url_config_get_string("CORE_INFO_URL",
+                                             "https://buildbot.libretro.com/assets/frontend/info.zip");
+    char archive[MAX_PATH_LEN];
+    fs_join_path(archive, sizeof(archive), g_config.config_dir, "retroarch-core-info.zip");
+    DownloadResult result;
+    log_add(LOG_LEVEL_INFO, "[DOWNLOAD] RetroArch core information");
+    if (!download_file(url, archive, download_progress_cb, NULL,
+                       &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &result)) return false;
+    log_add(LOG_LEVEL_INFO, "[EXTRACT] RetroArch core information");
+    if (!fs_extract_archive(archive, info_dir)) return false;
+
+    if (g_config.mode == MODE_STEAM) {
+        char cores_dir[MAX_PATH_LEN];
+        fs_join_path(cores_dir, sizeof(cores_dir), g_config.ra_dir, "cores");
+        for (int i = 0; i < TOTAL_PLATFORMS; ++i) {
+            if (!g_platforms[i].selected) continue;
+            char name[160], source[MAX_PATH_LEN], target[MAX_PATH_LEN];
+            snprintf(name, sizeof(name), "%s", g_platforms[i].core_file);
+            char* suffix = strstr(name, ".so");
+            if (suffix) snprintf(suffix, sizeof(name) - (size_t)(suffix - name), ".info");
+            fs_join_path(source, sizeof(source), info_dir, name);
+            fs_join_path(target, sizeof(target), cores_dir, name);
+            if (fs_exists(source)) fs_copy_file(source, target);
+        }
+    }
+    return true;
+}
+
+static void configure_retroarch_paths(void) {
+    char config_path[MAX_PATH_LEN];
+    fs_join_path(config_path, sizeof(config_path), g_config.ra_dir, "retroarch.cfg");
+    if (!fs_exists(config_path)) {
+        log_add(LOG_LEVEL_WARN, "retroarch.cfg not found; open RetroArch once to create it: %s", config_path);
+        return;
+    }
+    const char* keys[] = {"libretro_directory", "libretro_info_path", "system_directory",
+                          "playlist_directory", "thumbnails_directory", "network_on_demand_thumbnails",
+                          "quick_menu_show_download_thumbnails"};
+    char values[7][4096];
+    fs_join_path(values[0], sizeof(values[0]), g_config.ra_dir, "cores");
+    fs_join_path(values[1], sizeof(values[1]), g_config.ra_dir, "core_info");
+    fs_join_path(values[2], sizeof(values[2]), g_config.ra_dir, "system");
+    fs_join_path(values[3], sizeof(values[3]), g_config.ra_dir, "playlists");
+    fs_join_path(values[4], sizeof(values[4]), g_config.ra_dir, "thumbnails");
+    snprintf(values[5], sizeof(values[5]), "true");
+    snprintf(values[6], sizeof(values[6]), "true");
+    char temp_path[4096];
+    snprintf(temp_path, sizeof(temp_path), "%s.retro_setup.tmp", config_path);
+    FILE* input = fopen(config_path, "r");
+    FILE* output = fopen(temp_path, "w");
+    if (!input || !output) { if (input) fclose(input); if (output) fclose(output); return; }
+    bool found[7] = {false};
+    char line[4096];
+    while (fgets(line, sizeof(line), input)) {
+        bool replaced = false;
+        for (int i = 0; i < 7; ++i) {
+            size_t length = strlen(keys[i]);
+            if (!strncmp(line, keys[i], length) && (line[length] == ' ' || line[length] == '=')) {
+                fprintf(output, "%s = \"%s\"\n", keys[i], values[i]);
+                found[i] = true; replaced = true; break;
+            }
+        }
+        if (!replaced) fputs(line, output);
+    }
+    for (int i = 0; i < 7; ++i) if (!found[i]) fprintf(output, "%s = \"%s\"\n", keys[i], values[i]);
+    fclose(input);
+    if (fclose(output) == 0 && rename(temp_path, config_path) == 0)
+        log_add(LOG_LEVEL_INFO, "[INSTALL] RetroArch paths configured for %s mode",
+                g_config.mode == MODE_STEAM ? "Steam" : "standalone");
+    else fs_remove_file(temp_path);
+}
+
 typedef struct {
     PlatformInfo* platform;
     int total_selected;
@@ -62,8 +150,13 @@ static bool process_platform_downloads(PlatformInfo* p) {
         DownloadResult dl;
         if (download_file(core_url, core_zip, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl)) {
             log_add(LOG_LEVEL_INFO, "[EXTRACT] %s", core_zip_name);
-            fs_extract_archive(core_zip, cores_dir);
-            fs_remove_file(core_zip);
+            if (!fs_extract_archive(core_zip, cores_dir) || !fs_exists(core_target)) {
+                log_add(LOG_LEVEL_ERROR, "[FAILED] Core archive did not install %s", p->core_file);
+                has_errors = true;
+            } else {
+                fs_remove_file(core_zip);
+                log_add(LOG_LEVEL_INFO, "[DONE] Core installed: %s", p->core_file);
+            }
         } else {
             snprintf(core_url, sizeof(core_url), "%s/%s", core_base_url, p->core_file);
             if (!download_file(core_url, core_target, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl)) {
@@ -157,6 +250,10 @@ static bool process_platform_downloads(PlatformInfo* p) {
                             fprintf(mf, "extracted OK\n");
                             fclose(mf);
                         }
+                        log_add(LOG_LEVEL_INFO, "[DONE] ROM pack installed for %s", p->name);
+                    } else {
+                        log_add(LOG_LEVEL_ERROR, "[FAILED] Could not extract ROM archive %s", rfn);
+                        has_errors = true;
                     }
                 }
             } else {
@@ -202,6 +299,14 @@ static int do_task_install(void) {
     download_manager_reset();
     SDL_AtomicSet(&g_task_mgr.work_completed, 0);
     SDL_AtomicSet(&g_task_mgr.work_total, selected_cnt + 1); /* platforms plus playlist generation */
+
+    char install_dir[MAX_PATH_LEN];
+    fs_join_path(install_dir, sizeof(install_dir), g_config.ra_dir, "cores"); fs_mkdir_p(install_dir);
+    fs_join_path(install_dir, sizeof(install_dir), g_config.ra_dir, "system"); fs_mkdir_p(install_dir);
+    fs_join_path(install_dir, sizeof(install_dir), g_config.ra_dir, "playlists"); fs_mkdir_p(install_dir);
+    if (!ensure_core_info_for_selected())
+        log_add(LOG_LEVEL_WARN, "Core information could not be completely installed.");
+    configure_retroarch_paths();
 
     SDL_atomic_t error_counter;
     SDL_AtomicSet(&error_counter, 0);
@@ -377,7 +482,7 @@ static int do_task_prepare(void) {
     char dir_playlists[MAX_PATH_LEN], dir_thumbs[MAX_PATH_LEN], dir_db[MAX_PATH_LEN];
 
     fs_join_path(dir_cores, sizeof(dir_cores), g_config.ra_dir, "cores");
-    fs_join_path(dir_info, sizeof(dir_info), g_config.ra_dir, "info");
+    fs_join_path(dir_info, sizeof(dir_info), g_config.ra_dir, "core_info");
     fs_join_path(dir_sys, sizeof(dir_sys), g_config.ra_dir, "system");
     fs_join_path(dir_playlists, sizeof(dir_playlists), g_config.ra_dir, "playlists");
     fs_join_path(dir_thumbs, sizeof(dir_thumbs), g_config.ra_dir, "thumbnails");
