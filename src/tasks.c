@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_thread.h>
 #include <SDL2/SDL_atomic.h>
@@ -27,6 +28,7 @@ typedef struct {
 } TaskManager;
 
 static TaskManager g_task_mgr;
+static SDL_mutex* g_shared_asset_mutex;
 
 static void download_progress_cb(const DownloadResult* result, void* user_data);
 
@@ -37,6 +39,7 @@ static bool ensure_core_info_for_selected(void) {
     bool missing = false;
     for (int i = 0; i < TOTAL_PLATFORMS; ++i) {
         if (!g_platforms[i].selected) continue;
+        if (!g_platforms[i].core_file[0]) continue;
         char name[160], path[MAX_PATH_LEN];
         snprintf(name, sizeof(name), "%s", g_platforms[i].core_file);
         char* suffix = strstr(name, ".so");
@@ -62,6 +65,7 @@ static bool ensure_core_info_for_selected(void) {
         fs_join_path(cores_dir, sizeof(cores_dir), g_config.ra_dir, "cores");
         for (int i = 0; i < TOTAL_PLATFORMS; ++i) {
             if (!g_platforms[i].selected) continue;
+            if (!g_platforms[i].core_file[0]) continue;
             char name[160], source[MAX_PATH_LEN], target[MAX_PATH_LEN];
             snprintf(name, sizeof(name), "%s", g_platforms[i].core_file);
             char* suffix = strstr(name, ".so");
@@ -130,13 +134,20 @@ static bool process_platform_downloads(PlatformInfo* p) {
     const char* core_base_url = url_config_get_string("LIBRETRO_CORE_BASE_URL", "https://buildbot.libretro.com/nightly/linux/x86_64/latest");
     bool has_errors = false;
 
-    // 1. Download Core (if not already installed)
+    // 1. Download Core (if a compatible libretro implementation exists)
     char cores_dir[MAX_PATH_LEN];
     fs_join_path(cores_dir, sizeof(cores_dir), g_config.ra_dir, "cores");
     char core_target[MAX_PATH_LEN];
     fs_join_path(core_target, sizeof(core_target), cores_dir, p->core_file);
 
-    if (fs_exists(core_target) && fs_file_size(core_target) > 0) {
+    SDL_LockMutex(g_shared_asset_mutex);
+    if (!p->core_file[0]) {
+        log_add(LOG_LEVEL_ERROR,
+                "[UNSUPPORTED] %s has no compatible RetroArch/libretro core. "
+                "ROMs will be preserved in %s/%s for a compatible external emulator; no fallback core will be used.",
+                p->name, g_config.rom_dir, p->id);
+        has_errors = true;
+    } else if (fs_exists(core_target) && fs_file_size(core_target) > 0) {
         log_add(LOG_LEVEL_INFO, "Core %s already installed, skipping download.", p->core_file);
     } else {
         char core_url[1024];
@@ -158,13 +169,12 @@ static bool process_platform_downloads(PlatformInfo* p) {
                 log_add(LOG_LEVEL_INFO, "[DONE] Core installed: %s", p->core_file);
             }
         } else {
-            snprintf(core_url, sizeof(core_url), "%s/%s", core_base_url, p->core_file);
-            if (!download_file(core_url, core_target, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl)) {
-                log_add(LOG_LEVEL_ERROR, "ERROR: Failed to download core %s for %s: %s (HTTP status: %ld)", p->core_file, p->name, dl.error, dl.http_status);
-                has_errors = true;
-            }
+            log_add(LOG_LEVEL_ERROR, "ERROR: Failed to download core %s for %s: %s (HTTP status: %ld)", p->core_file, p->name, dl.error, dl.http_status);
+            has_errors = true;
         }
     }
+    SDL_UnlockMutex(g_shared_asset_mutex);
+    if (has_errors) return false;
 
     // 2. Download BIOS if defined in retro_url.config
     char bios_key[128];
@@ -186,21 +196,31 @@ static bool process_platform_downloads(PlatformInfo* p) {
         char bios_dst[MAX_PATH_LEN];
         fs_join_path(bios_dst, sizeof(bios_dst), sys_dir, fn);
 
-        if (fs_exists(bios_dst) && fs_file_size(bios_dst) > 0) {
-            log_add(LOG_LEVEL_INFO, "BIOS %s already present, skipping download.", fn);
-            continue;
-        }
-
-        log_add(LOG_LEVEL_INFO, "Downloading BIOS %s: %s", p->id, fn);
+        SDL_LockMutex(g_shared_asset_mutex);
+        log_add(LOG_LEVEL_INFO, "Checking BIOS/data asset %s: %s", p->id, fn);
         DownloadResult dl;
-        if (download_file(bios_urls[b], bios_dst, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl)) {
-            if (strstr(fn, ".zip") || strstr(fn, ".7z")) {
-                log_add(LOG_LEVEL_INFO, "[EXTRACT] %s", fn);
-                fs_extract_archive(bios_dst, sys_dir);
-            }
-        } else {
+        bool bios_ok = download_file(bios_urls[b], bios_dst, download_progress_cb, NULL,
+                                     &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl);
+        if (!bios_ok)
             log_add(LOG_LEVEL_ERROR, "ERROR: Failed to download BIOS %s for %s: %s (HTTP %ld)", fn, p->name, dl.error, dl.http_status);
+        if (bios_ok && (strstr(fn, ".zip") || strstr(fn, ".7z"))) {
+            char archive_error[256] = {0};
+            if (!fs_validate_archive(bios_dst, archive_error, sizeof(archive_error))) {
+                log_add(LOG_LEVEL_ERROR, "[FAILED] Invalid BIOS archive %s: %s", fn, archive_error);
+                fs_remove_file(bios_dst);
+                bios_ok = false;
+            } else {
+                log_add(LOG_LEVEL_INFO, "[EXTRACT] %s", fn);
+                if (!fs_extract_archive(bios_dst, sys_dir)) {
+                    log_add(LOG_LEVEL_ERROR, "[FAILED] Could not extract BIOS/data archive %s", fn);
+                    bios_ok = false;
+                }
+            }
+        }
+        SDL_UnlockMutex(g_shared_asset_mutex);
+        if (!bios_ok) {
             has_errors = true;
+            return false;
         }
     }
 
@@ -253,12 +273,12 @@ static bool process_platform_downloads(PlatformInfo* p) {
                         log_add(LOG_LEVEL_INFO, "[DONE] ROM pack installed for %s", p->name);
                     } else {
                         log_add(LOG_LEVEL_ERROR, "[FAILED] Could not extract ROM archive %s", rfn);
-                        has_errors = true;
+                        return false;
                     }
                 }
             } else {
                 log_add(LOG_LEVEL_ERROR, "ERROR: Failed to download ROM pack %s for %s [%s]: %s (HTTP %ld)", rfn, p->name, rom_urls[r], dl.error, dl.http_status);
-                has_errors = true;
+                return false;
             }
         }
     } else {
@@ -377,24 +397,23 @@ static int do_task_install(void) {
 
     if (g_task_mgr.cancel_requested) return -1;
 
-    // Generate Playlists
+    int err_count = SDL_AtomicGet(&error_counter);
+    if (err_count > 0) {
+        snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Installation stopped with %d error(s).", err_count);
+        log_add(LOG_LEVEL_ERROR, "=== Installation Stopped with %d Error(s); dependent playlist generation skipped ===", err_count);
+        return 1;
+    }
+
+    // Generate Playlists only after every required asset was installed.
     log_add(LOG_LEVEL_INFO, "Generating RetroArch Playlists...");
     snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Generating playlists...");
     playlist_generate_selected(g_config.ra_dir, g_config.rom_dir);
     SDL_AtomicSet(&g_task_mgr.work_completed, selected_cnt + 1);
 
-    int err_count = SDL_AtomicGet(&error_counter);
-    if (err_count > 0) {
-        g_task_mgr.progress = 1.0f;
-        snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Installation completed with %d error(s)! Check log window.", err_count);
-        log_add(LOG_LEVEL_ERROR, "=== Installation Finished with %d Error(s) ===", err_count);
-        return 1;
-    } else {
-        g_task_mgr.progress = 1.0f;
-        snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Installation completed successfully!");
-        log_add(LOG_LEVEL_INFO, "=== Installation Completed Successfully ===");
-        return 0;
-    }
+    g_task_mgr.progress = 1.0f;
+    snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Installation completed successfully!");
+    log_add(LOG_LEVEL_INFO, "=== Installation Completed Successfully ===");
+    return 0;
 }
 
 const char* task_get_title(TaskType task) {
@@ -405,6 +424,7 @@ const char* task_get_title(TaskType task) {
         case TASK_THUMBNAILS:return "DOWNLOAD THUMBNAILS";
         case TASK_IMPLODE:   return "RESET CONFIGURATION";
         case TASK_STATUS:    return "SYSTEM STATUS";
+        case TASK_INSTALLATION_DIAGNOSTIC: return "INSTALLATION DIAGNOSTIC";
         default:             return "EXECUTING TASK";
     }
 }
@@ -412,6 +432,7 @@ const char* task_get_title(TaskType task) {
 bool tasks_init(void) {
     memset(&g_task_mgr, 0, sizeof(g_task_mgr));
     download_init();
+    g_shared_asset_mutex = SDL_CreateMutex();
     log_init();
     return true;
 }
@@ -423,6 +444,8 @@ void tasks_cleanup(void) {
         g_task_mgr.thread = NULL;
     }
     download_cleanup();
+    if (g_shared_asset_mutex) SDL_DestroyMutex(g_shared_asset_mutex);
+    g_shared_asset_mutex = NULL;
 }
 
 static void download_progress_cb(const DownloadResult* result, void* user_data) {
@@ -706,6 +729,138 @@ static int do_task_status(void) {
     return 0;
 }
 
+static bool catalog_has_playlist_name(const char* filename) {
+    for (int i = 0; i < TOTAL_PLATFORMS; ++i) {
+        char expected[256];
+        snprintf(expected, sizeof(expected), "%s.lpl", g_platforms[i].name);
+        if (!strcmp(filename, expected)) return true;
+    }
+    return false;
+}
+
+static bool catalog_has_platform_id(const char* id) {
+    for (int i = 0; i < TOTAL_PLATFORMS; ++i) if (!strcmp(id, g_platforms[i].id)) return true;
+    return false;
+}
+
+static int do_task_installation_diagnostic(void) {
+    log_add(LOG_LEVEL_INFO, "=== Installation Diagnostic: %s ===",
+            g_config.mode == MODE_STEAM ? "STEAM" : "STANDALONE");
+    url_config_load(g_config.url_config_file);
+    int url_total = 0;
+    for (int i = 0; i < url_config_get_entry_count(); ++i) {
+        const UrlArrayEntry* entry = url_config_get_entry(i);
+        if (entry) url_total += entry->url_count;
+    }
+    int total = TOTAL_PLATFORMS + url_total + 1;
+    SDL_AtomicSet(&g_task_mgr.work_total, total);
+    SDL_AtomicSet(&g_task_mgr.work_completed, 0);
+    int done = 0, warnings = 0, errors = 0;
+    int obsolete_count = 0, incomplete_count = 0, missing_core_count = 0;
+
+    char playlists[MAX_PATH_LEN];
+    fs_join_path(playlists, sizeof(playlists), g_config.ra_dir, "playlists");
+    DIR* directory = opendir(playlists);
+    if (directory) {
+        struct dirent* item;
+        while ((item = readdir(directory)) != NULL) {
+            size_t len = strlen(item->d_name);
+            if (len > 4 && !strcmp(item->d_name + len - 4, ".lpl") && !catalog_has_playlist_name(item->d_name)) {
+                log_add(LOG_LEVEL_WARN, "[OBSOLETE] Playlist is not in the current catalog: %s", item->d_name);
+                log_add(LOG_LEVEL_INFO, "[ACTION] Review and remove this playlist from the active %s installation.",
+                        g_config.mode == MODE_STEAM ? "Steam" : "standalone");
+                warnings++;
+                obsolete_count++;
+            }
+        }
+        closedir(directory);
+    }
+    directory = opendir(g_config.rom_dir);
+    if (directory) {
+        struct dirent* item;
+        while ((item = readdir(directory)) != NULL) {
+            if (item->d_name[0] == '.') continue;
+            char path[MAX_PATH_LEN];
+            fs_join_path(path, sizeof(path), g_config.rom_dir, item->d_name);
+            if (fs_is_dir(path) && !catalog_has_platform_id(item->d_name)) {
+                log_add(LOG_LEVEL_WARN, "[OBSOLETE] ROM directory is not in the current catalog: %s", item->d_name);
+                log_add(LOG_LEVEL_INFO, "[ACTION] Back up wanted ROMs, then remove or migrate this directory.");
+                warnings++;
+                obsolete_count++;
+            }
+        }
+        closedir(directory);
+    }
+
+    for (int i = 0; i < TOTAL_PLATFORMS && !g_task_mgr.cancel_requested; ++i) {
+        PlatformInfo* p = &g_platforms[i];
+        char core[MAX_PATH_LEN], roms[MAX_PATH_LEN], playlist[MAX_PATH_LEN];
+        snprintf(core, sizeof(core), "%.1000s/cores/%.500s", g_config.ra_dir, p->core_file);
+        fs_join_path(roms, sizeof(roms), g_config.rom_dir, p->id);
+        snprintf(playlist, sizeof(playlist), "%.1000s/playlists/%.500s.lpl", g_config.ra_dir, p->name);
+        bool installed = fs_exists(core) || fs_is_dir(roms) || fs_exists(playlist) || p->selected;
+        if (installed) {
+            bool healthy = p->core_file[0] && fs_is_file(core) && fs_file_size(core) > 0;
+            if (healthy && fs_is_dir(roms) && !fs_exists(playlist)) healthy = false;
+            log_add(healthy ? LOG_LEVEL_INFO : LOG_LEVEL_WARN, "[%s] %s | core:%s roms:%s playlist:%s",
+                    healthy ? "HEALTHY" : "INCOMPLETE", p->name,
+                    fs_exists(core) ? "OK" : "MISSING", fs_is_dir(roms) ? "OK" : "NONE",
+                    fs_exists(playlist) ? "OK" : "MISSING");
+            if (!healthy) {
+                warnings++;
+                incomplete_count++;
+                if (!fs_exists(core)) {
+                    missing_core_count++;
+                    log_add(LOG_LEVEL_INFO, "[ACTION] Select %s and run INSTALL PLATFORMS & ASSETS to install its core.", p->name);
+                } else if (fs_is_dir(roms) && !fs_exists(playlist)) {
+                    log_add(LOG_LEVEL_INFO, "[ACTION] Run INSTALL PLATFORMS & ASSETS again to regenerate the playlist.");
+                }
+            }
+        } else log_add(LOG_LEVEL_INFO, "[NOT INSTALLED] %s", p->name);
+        done++;
+        SDL_AtomicSet(&g_task_mgr.work_completed, done);
+        g_task_mgr.progress = (float)done / (float)total;
+        snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Scanning platform %d/%d: %s", i + 1, TOTAL_PLATFORMS, p->name);
+    }
+
+    for (int i = 0; i < url_config_get_entry_count() && !g_task_mgr.cancel_requested; ++i) {
+        const UrlArrayEntry* entry = url_config_get_entry(i);
+        if (!entry) continue;
+        for (int u = 0; u < entry->url_count && !g_task_mgr.cancel_requested; ++u) {
+            long http = 0; curl_off_t size = -1; char error[256] = {0};
+            snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Testing URL %d/%d: %s", done - TOTAL_PLATFORMS + 1, url_total, entry->key);
+            bool ok = download_check_url(entry->urls[u], &http, &size, error, sizeof(error));
+            if (ok) log_add(LOG_LEVEL_INFO, "[URL OK] %s | HTTP %ld | %s", entry->key, http, size >= 0 ? "SIZE KNOWN" : "SIZE UNKNOWN");
+            else {
+                log_add(LOG_LEVEL_ERROR, "[URL FAILED] %s | HTTP %ld | %s", entry->key, http, error);
+                log_add(LOG_LEVEL_INFO, http == 404
+                        ? "[ACTION] Replace or remove the unavailable URL in retro_url.config."
+                        : "[ACTION] Check connectivity and retry; if persistent, update this entry in retro_url.config.");
+                errors++;
+            }
+            done++;
+            SDL_AtomicSet(&g_task_mgr.work_completed, done);
+            g_task_mgr.progress = (float)done / (float)total;
+        }
+    }
+    done++;
+    SDL_AtomicSet(&g_task_mgr.work_completed, done);
+    if (g_task_mgr.cancel_requested) return -1;
+    g_task_mgr.progress = 1.0f;
+    log_add(LOG_LEVEL_INFO, "=== DIAGNOSTIC REPORT ===");
+    log_add(LOG_LEVEL_INFO, "Mode: %s", g_config.mode == MODE_STEAM ? "Steam" : "Standalone");
+    log_add(LOG_LEVEL_INFO, "Target: %s", g_config.ra_dir);
+    log_add(LOG_LEVEL_INFO, "Platforms: %d catalogued | %d incomplete | %d missing core", TOTAL_PLATFORMS, incomplete_count, missing_core_count);
+    log_add(LOG_LEVEL_INFO, "Obsolete artifacts: %d | URL failures: %d", obsolete_count, errors);
+    if (!warnings && !errors) log_add(LOG_LEVEL_INFO, "[ACTION] No corrective action is required.");
+    else log_add(LOG_LEVEL_WARN, "[ACTION] Resolve URL failures first, run INSTALL for incomplete platforms, then review obsolete artifacts.");
+    snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message),
+             "Diagnostic complete: %d warning(s), %d failed URL(s).", warnings, errors);
+    log_add(errors ? LOG_LEVEL_ERROR : (warnings ? LOG_LEVEL_WARN : LOG_LEVEL_INFO),
+            "=== Diagnostic Complete: %d warning(s), %d failed URL(s) ===", warnings, errors);
+    return errors ? 1 : 0;
+}
+
 static int SDLCALL task_worker_thread(void* data) {
     TaskType task = (TaskType)(uintptr_t)data;
     int res = 0;
@@ -717,6 +872,7 @@ static int SDLCALL task_worker_thread(void* data) {
         case TASK_THUMBNAILS:res = do_task_thumbnails(); break;
         case TASK_IMPLODE:   res = do_task_implode(); break;
         case TASK_STATUS:    res = do_task_status(); break;
+        case TASK_INSTALLATION_DIAGNOSTIC: res = do_task_installation_diagnostic(); break;
         default: break;
     }
 
@@ -801,6 +957,7 @@ int task_run_sync(TaskType task) {
         case TASK_THUMBNAILS:res = do_task_thumbnails(); break;
         case TASK_IMPLODE:   res = do_task_implode(); break;
         case TASK_STATUS:    res = do_task_status(); break;
+        case TASK_INSTALLATION_DIAGNOSTIC: res = do_task_installation_diagnostic(); break;
         default: break;
     }
 

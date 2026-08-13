@@ -44,9 +44,7 @@ void log_add(LogLevel level, const char* fmt, ...) {
         snprintf(g_log_lines[g_log_count++], LOG_LINE_LEN, "%s", buf);
     } else {
         // Shift log lines up
-        for (int i = 0; i < MAX_LOG_LINES - 1; i++) {
-            snprintf(g_log_lines[i], LOG_LINE_LEN, "%s", g_log_lines[i + 1]);
-        }
+        memmove(g_log_lines[0], g_log_lines[1], (MAX_LOG_LINES - 1) * LOG_LINE_LEN);
         snprintf(g_log_lines[MAX_LOG_LINES - 1], LOG_LINE_LEN, "%s", buf);
     }
 }

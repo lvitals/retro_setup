@@ -6,12 +6,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 
 typedef struct {
     DownloadTask tasks[MAX_DOWNLOAD_TASKS];
     int count;
     SDL_mutex* mutex;
+    SDL_cond* condition;
 } DownloadManager;
 
 typedef struct {
@@ -37,6 +39,27 @@ typedef struct {
 
 static DownloadManager g_downloads;
 
+static bool validate_for_destination(const char* path, const char* destination, char* error, size_t error_size) {
+    if (!fs_is_file(path) || fs_file_size(path) <= 0) {
+        if (error) snprintf(error, error_size, "File is missing or empty");
+        return false;
+    }
+    const char* extension = strrchr(destination, '.');
+    if (extension && (!strcasecmp(extension, ".zip") || !strcasecmp(extension, ".7z") ||
+                      !strcasecmp(extension, ".rar") || !strcasecmp(extension, ".tar")))
+        return fs_validate_archive(path, error, error_size);
+    FILE* file = fopen(path, "rb");
+    if (!file) return false;
+    unsigned char prefix[32] = {0};
+    size_t length = fread(prefix, 1, sizeof(prefix) - 1, file);
+    fclose(file);
+    if (length > 0 && (strstr((char*)prefix, "<!DOCTYPE html") || strstr((char*)prefix, "<html"))) {
+        if (error) snprintf(error, error_size, "Server returned HTML instead of the requested file");
+        return false;
+    }
+    return true;
+}
+
 static void manager_lock(void) { if (g_downloads.mutex) SDL_LockMutex(g_downloads.mutex); }
 static void manager_unlock(void) { if (g_downloads.mutex) SDL_UnlockMutex(g_downloads.mutex); }
 
@@ -52,8 +75,40 @@ static DownloadTask* task_by_id_unlocked(int id) {
     return NULL;
 }
 
-static int manager_add(const char* url, const char* destination) {
+static bool state_is_terminal(DownloadState state) {
+    return state == DOWNLOAD_COMPLETED || state == DOWNLOAD_SKIPPED || state == DOWNLOAD_FAILED ||
+           state == DOWNLOAD_CANCELLED;
+}
+
+/* Claim a destination once per install run. Other workers reuse the result. */
+static int manager_claim(const char* url, const char* destination, DownloadResult* reused) {
     manager_lock();
+    for (;;) {
+        DownloadTask* existing = NULL;
+        for (int i = 0; i < g_downloads.count; ++i) {
+            if (!strcmp(g_downloads.tasks[i].destination, destination)) { existing = &g_downloads.tasks[i]; break; }
+        }
+        if (!existing) break;
+        while (!state_is_terminal(existing->state)) {
+            SDL_CondWait(g_downloads.condition, g_downloads.mutex);
+            existing = NULL;
+            for (int i = 0; i < g_downloads.count; ++i)
+                if (!strcmp(g_downloads.tasks[i].destination, destination)) { existing = &g_downloads.tasks[i]; break; }
+            if (!existing) break;
+        }
+        if (!existing) continue;
+        memset(reused, 0, sizeof(*reused));
+        reused->task_id = existing->id;
+        reused->state = existing->state;
+        reused->http_status = existing->http_status;
+        reused->downloaded_bytes = existing->downloaded_bytes;
+        reused->total_bytes = existing->remote_size;
+        reused->speed_bytes_per_sec = existing->speed_bytes_per_sec;
+        reused->success = existing->state == DOWNLOAD_COMPLETED || existing->state == DOWNLOAD_SKIPPED;
+        snprintf(reused->error, sizeof(reused->error), "%s", existing->error);
+        manager_unlock();
+        return 0;
+    }
     if (g_downloads.count >= MAX_DOWNLOAD_TASKS) { manager_unlock(); return -1; }
     DownloadTask* t = &g_downloads.tasks[g_downloads.count];
     memset(t, 0, sizeof(*t));
@@ -83,6 +138,7 @@ static void manager_update(int id, DownloadState state, curl_off_t now, curl_off
         t->eta_seconds = (speed > 0.0 && t->remote_size > t->downloaded_bytes)
                        ? (double)(t->remote_size - t->downloaded_bytes) / speed : -1.0;
         if (error) snprintf(t->error, sizeof(t->error), "%s", error);
+        if (state_is_terminal(state) && g_downloads.condition) SDL_CondBroadcast(g_downloads.condition);
     }
     manager_unlock();
 }
@@ -90,13 +146,16 @@ static void manager_update(int id, DownloadState state, curl_off_t now, curl_off
 bool download_init(void) {
     memset(&g_downloads, 0, sizeof(g_downloads));
     g_downloads.mutex = SDL_CreateMutex();
-    return g_downloads.mutex && curl_global_init(CURL_GLOBAL_ALL) == CURLE_OK;
+    g_downloads.condition = SDL_CreateCond();
+    return g_downloads.mutex && g_downloads.condition && curl_global_init(CURL_GLOBAL_ALL) == CURLE_OK;
 }
 
 void download_cleanup(void) {
     curl_global_cleanup();
     if (g_downloads.mutex) SDL_DestroyMutex(g_downloads.mutex);
+    if (g_downloads.condition) SDL_DestroyCond(g_downloads.condition);
     g_downloads.mutex = NULL;
+    g_downloads.condition = NULL;
 }
 
 void download_manager_reset(void) {
@@ -138,12 +197,22 @@ static bool query_remote(const char* url, RemoteInfo* info, char* error, size_t 
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 45L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "RetroSetupGUI/3.0");
     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
     CURLcode rc = curl_easy_perform(curl);
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &info->status);
     if (rc == CURLE_OK) curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &info->size);
     if (rc != CURLE_OK && error) snprintf(error, error_size, "%s", errbuf[0] ? errbuf : curl_easy_strerror(rc));
     curl_easy_cleanup(curl);
-    return rc == CURLE_OK;
+    return rc == CURLE_OK && info->status >= 200 && info->status < 400;
+}
+
+bool download_check_url(const char* url, long* http_status, curl_off_t* remote_size,
+                        char* error, size_t error_size) {
+    RemoteInfo info;
+    bool ok = query_remote(url, &info, error, error_size);
+    if (http_status) *http_status = info.status;
+    if (remote_size) *remote_size = info.size;
+    return ok;
 }
 
 static size_t header_callback(char* buffer, size_t size, size_t nitems, void* userdata) {
@@ -219,13 +288,16 @@ static CURLcode perform_transfer(const char* url, const char* partial, curl_off_
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "RetroSetupGUI/3.0");
     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curl_error);
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
     if (offset > 0) curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE, offset);
     CURLcode rc = curl_easy_perform(curl);
     fflush(ctx->file);
     fclose(ctx->file);
     ctx->file = NULL;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, http_status);
-    curl_easy_getinfo(curl, CURLINFO_SPEED_DOWNLOAD_T, &ctx->result->speed_bytes_per_sec);
+    curl_off_t speed = 0;
+    if (curl_easy_getinfo(curl, CURLINFO_SPEED_DOWNLOAD_T, &speed) == CURLE_OK)
+        ctx->result->speed_bytes_per_sec = (double)speed;
     curl_easy_cleanup(curl);
     return rc;
 }
@@ -236,7 +308,14 @@ bool download_file(const char* url, const char* destination, DownloadProgressCal
     memset(&result, 0, sizeof(result));
     result.total_bytes = -1;
     if (!url || !destination) return false;
-    int id = manager_add(url, destination);
+    int id = manager_claim(url, destination, &result);
+    if (id == 0) {
+        log_add(result.success ? LOG_LEVEL_INFO : LOG_LEVEL_ERROR,
+                result.success ? "[REUSE] Shared asset already completed: %s" : "[FAILED] Shared asset previously failed: %s",
+                destination);
+        if (out) *out = result;
+        return result.success != 0;
+    }
     result.task_id = id;
     if (id < 0) { snprintf(result.error, sizeof(result.error), "Download queue is full"); if (out) *out = result; return false; }
 
@@ -257,13 +336,16 @@ bool download_file(const char* url, const char* destination, DownloadProgressCal
     if (task) { task->local_size = part_size > 0 ? part_size : final_size; task->can_resume = part_size > 0; }
     manager_unlock();
 
-    if (have_remote && remote.status == 404) {
-        snprintf(result.error, sizeof(result.error), "HTTP 404: file not found");
+    if (!have_remote && remote.status >= 400 && remote.status != 405 && remote.status != 501) {
+        result.http_status = remote.status;
+        snprintf(result.error, sizeof(result.error), "HTTP %ld: URL check failed", remote.status);
         manager_update(id, DOWNLOAD_FAILED, 0, remote.size, 0, remote.status, result.error);
         if (out) *out = result;
         return false;
     }
-    if (final_size > 0 && have_remote && remote.size >= 0 && final_size == remote.size) {
+    char existing_error[256] = {0};
+    if (final_size > 0 && have_remote && remote.size >= 0 && final_size == remote.size &&
+        validate_for_destination(destination, destination, existing_error, sizeof(existing_error))) {
         result.success = 1; result.state = DOWNLOAD_SKIPPED; result.http_status = remote.status;
         result.downloaded_bytes = result.total_bytes = final_size;
         manager_update(id, DOWNLOAD_SKIPPED, final_size, final_size, 0, remote.status, NULL);
@@ -272,6 +354,8 @@ bool download_file(const char* url, const char* destination, DownloadProgressCal
         return true;
     }
     if (final_size > 0) {
+        if (have_remote && remote.size >= 0 && final_size == remote.size)
+            log_add(LOG_LEVEL_WARN, "Existing file failed validation (%s); restarting: %s", existing_error, destination);
         if (!have_remote || remote.size < 0) {
             log_add(LOG_LEVEL_WARN, "Cannot validate existing file; moving it to .part for verification by transfer: %s", destination);
             if (part_size == 0) rename(destination, partial);
@@ -281,7 +365,9 @@ bool download_file(const char* url, const char* destination, DownloadProgressCal
         }
     }
     part_size = (curl_off_t)fs_file_size(partial);
-    if (have_remote && remote.size >= 0 && part_size == remote.size && part_size > 0) {
+    char partial_error[256] = {0};
+    if (have_remote && remote.size >= 0 && part_size == remote.size && part_size > 0 &&
+        validate_for_destination(partial, destination, partial_error, sizeof(partial_error))) {
         manager_update(id, DOWNLOAD_VERIFYING, part_size, remote.size, 0, remote.status, NULL);
         if (rename(partial, destination) == 0) {
             result.success = 1; result.state = DOWNLOAD_COMPLETED;
@@ -290,6 +376,11 @@ bool download_file(const char* url, const char* destination, DownloadProgressCal
             if (out) *out = result;
             return true;
         }
+    }
+    if (have_remote && remote.size >= 0 && part_size == remote.size && part_size > 0) {
+        log_add(LOG_LEVEL_WARN, "Complete partial failed validation (%s); restarting: %s", partial_error, partial);
+        remove(partial);
+        part_size = 0;
     }
     if (have_remote && remote.size >= 0 && part_size > remote.size) {
         log_add(LOG_LEVEL_WARN, "[DOWNLOAD] Partial is larger than remote; restarting %s", partial);
@@ -321,9 +412,16 @@ bool download_file(const char* url, const char* destination, DownloadProgressCal
     curl_off_t received = (curl_off_t)fs_file_size(partial);
 
     if (rc == CURLE_OK && (http == 200 || http == 206)) {
-        if (have_remote && remote.size >= 0 && received != remote.size) {
+        if (received <= 0 || !fs_is_file(partial)) {
+            snprintf(result.error, sizeof(result.error), "Downloaded file is missing or empty");
+        } else if (have_remote && remote.size >= 0 && received != remote.size) {
             snprintf(result.error, sizeof(result.error), "Size mismatch: got %lld, expected %lld", (long long)received, (long long)remote.size);
-        } else if (rename(partial, destination) == 0) {
+        } else {
+            char validation_error[256] = {0};
+            if (!validate_for_destination(partial, destination, validation_error, sizeof(validation_error))) {
+                snprintf(result.error, sizeof(result.error), "Invalid download: %.220s", validation_error);
+                remove(partial);
+            } else if (rename(partial, destination) == 0) {
             result.success = 1; result.state = DOWNLOAD_COMPLETED;
             result.downloaded_bytes = received;
             result.total_bytes = remote.size >= 0 ? remote.size : received;
@@ -332,8 +430,11 @@ bool download_file(const char* url, const char* destination, DownloadProgressCal
                     (double)received / 1048576.0, result.speed_bytes_per_sec / 1048576.0);
             if (out) *out = result;
             return true;
-        } else snprintf(result.error, sizeof(result.error), "Cannot atomically rename .part: %s", strerror(errno));
-    } else if (http == 416 && have_remote && remote.size >= 0 && received == remote.size && rename(partial, destination) == 0) {
+            } else snprintf(result.error, sizeof(result.error), "Cannot atomically rename .part: %s", strerror(errno));
+        }
+    } else if (http == 416 && have_remote && remote.size >= 0 && received == remote.size &&
+               validate_for_destination(partial, destination, result.error, sizeof(result.error)) &&
+               rename(partial, destination) == 0) {
         result.success = 1; result.state = DOWNLOAD_COMPLETED; result.downloaded_bytes = result.total_bytes = received;
         manager_update(id, DOWNLOAD_COMPLETED, received, received, 0, http, NULL);
         if (out) *out = result;
@@ -346,7 +447,8 @@ bool download_file(const char* url, const char* destination, DownloadProgressCal
         if (out) *out = result;
         return false;
     }
-    if (!result.error[0]) snprintf(result.error, sizeof(result.error), "HTTP %ld: %s", http, curl_error[0] ? curl_error : curl_easy_strerror(rc));
+    if (!result.error[0]) snprintf(result.error, sizeof(result.error), "HTTP %ld: %.220s", http, curl_error[0] ? curl_error : curl_easy_strerror(rc));
+    if (http >= 400 && received == 0) remove(partial);
     result.state = DOWNLOAD_FAILED;
     manager_update(id, DOWNLOAD_FAILED, received, remote.size, 0, http, result.error);
     log_add(LOG_LEVEL_ERROR, "[FAILED] %s: %s", destination, result.error);

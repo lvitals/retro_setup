@@ -8,7 +8,7 @@ PLATFORM_IDS=(
     mastersystem gamegear megadrive sega32x segacd sg1000 saturn
     neogeo neogeocd neogeopocket neogeopocketcolor
     msx msx2 msxturbor
-    atomiswave flycast model2 supermodel
+    atomiswave flycast
     turbografx wonderswan colecovision intellivision odyssey2 pcfx
     atari2600 atari5200 atari7800 atarilynx atarijaguar atarijaguarcd
 )
@@ -40,8 +40,6 @@ declare -A PLATFORM_NAME=(
     [msxturbor]="Microsoft - MSX TurboR"
     [atomiswave]="Arcade - Sammy Atomiswave"
     [flycast]="Arcade - Sega NAOMI"
-    [model2]="Arcade - Sega Model 2"
-    [supermodel]="Arcade - Sega Model 3"
     [turbografx]="NEC - PC Engine - TurboGrafx 16"
     [wonderswan]="Bandai - WonderSwan"
     [colecovision]="Coleco - ColecoVision"
@@ -83,8 +81,6 @@ declare -A PLATFORM_CORE=(
     [msxturbor]="bluemsx_libretro.so|MSX/SVI/ColecoVision/SG-1000 (blueMSX)"
     [atomiswave]="flycast_libretro.so|Sega - Dreamcast/NAOMI (Flycast)"
     [flycast]="flycast_libretro.so|Sega - Dreamcast/NAOMI (Flycast)"
-    [model2]="fbneo_libretro.so|Arcade (FinalBurn Neo)"
-    [supermodel]="fbneo_libretro.so|Arcade (FinalBurn Neo)"
     [turbografx]="mednafen_pce_fast_libretro.so|NEC - PC Engine / CD (Beetle PCE FAST)"
     [wonderswan]="mednafen_wswan_libretro.so|Bandai - WonderSwan / Color (Beetle Cygne)"
     [colecovision]="bluemsx_libretro.so|MSX/SVI/ColecoVision/SG-1000 (blueMSX)"
@@ -106,7 +102,7 @@ declare -A PLATFORM_EXTENSIONS=(
     [segacd]="chd cue iso" [sg1000]="sg" [saturn]="chd cue iso"
     [neogeo]="zip" [neogeocd]="chd cue iso" [neogeopocket]="ngp" [neogeopocketcolor]="ngc"
     [msx]="rom mx1 mx2 dsk" [msx2]="rom mx1 mx2 dsk" [msxturbor]="rom mx1 mx2 dsk"
-    [atomiswave]="zip chd" [flycast]="zip chd" [model2]="zip" [supermodel]="zip"
+    [atomiswave]="zip chd" [flycast]="zip chd"
     [turbografx]="pce chd cue" [wonderswan]="ws wsc" [colecovision]="col"
     [intellivision]="int bin" [odyssey2]="bin" [pcfx]="chd cue"
     [atari2600]="a26" [atari5200]="a52" [atari7800]="a78" [atarilynx]="lnx"

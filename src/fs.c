@@ -229,6 +229,40 @@ bool fs_extract_archive(const char* archive_path, const char* dest_dir) {
     return success;
 }
 
+bool fs_validate_archive(const char* archive_path, char* error, size_t error_size) {
+    if (!archive_path || !fs_is_file(archive_path) || fs_file_size(archive_path) <= 0) {
+        if (error) snprintf(error, error_size, "Archive is missing or empty");
+        return false;
+    }
+    struct archive* archive = archive_read_new();
+    archive_read_support_format_all(archive);
+    archive_read_support_filter_all(archive);
+    if (archive_read_open_filename(archive, archive_path, 10240) != ARCHIVE_OK) {
+        if (error) snprintf(error, error_size, "%s", archive_error_string(archive));
+        archive_read_free(archive);
+        return false;
+    }
+    struct archive_entry* entry = NULL;
+    int rc;
+    int entries = 0;
+    char buffer[65536];
+    while ((rc = archive_read_next_header(archive, &entry)) == ARCHIVE_OK) {
+        entries++;
+        la_ssize_t bytes;
+        while ((bytes = archive_read_data(archive, buffer, sizeof(buffer))) > 0) {}
+        if (bytes < 0) { rc = ARCHIVE_FATAL; break; }
+    }
+    if (rc != ARCHIVE_EOF || entries == 0) {
+        if (error) snprintf(error, error_size, "%s", archive_error_string(archive) ? archive_error_string(archive) : "Archive has no entries");
+        archive_read_close(archive);
+        archive_read_free(archive);
+        return false;
+    }
+    archive_read_close(archive);
+    archive_read_free(archive);
+    return true;
+}
+
 void fs_join_path(char* out, size_t out_size, const char* p1, const char* p2) {
     if (!out || out_size == 0) return;
     if (!p1) p1 = "";

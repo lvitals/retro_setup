@@ -147,3 +147,8 @@ const char* url_config_get_string(const char* key, const char* default_val) {
     }
     return default_val;
 }
+
+int url_config_get_entry_count(void) { return g_entry_count; }
+const UrlArrayEntry* url_config_get_entry(int index) {
+    return (index >= 0 && index < g_entry_count) ? &g_entries[index] : NULL;
+}

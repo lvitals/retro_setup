@@ -20,6 +20,7 @@ static void print_cli_help(const char* prog_name) {
     printf("  --thumbnails  Download thumbnails for saved platforms\n");
     printf("  --implode     Reset local RetroArch configuration\n");
     printf("  --status      Show platforms and configuration files\n");
+    printf("  --diagnostic  Audit installations and test configured URLs\n");
     printf("  --steam       Force Steam RetroArch mode\n");
     printf("  --gui         Force launch Graphical User Interface\n");
     printf("  --help, -h    Show this help message\n\n");
@@ -55,6 +56,9 @@ int main(int argc, char* argv[]) {
             force_cli = true;
         } else if (strcmp(argv[i], "--status") == 0) {
             cli_task = TASK_STATUS;
+            force_cli = true;
+        } else if (strcmp(argv[i], "--diagnostic") == 0) {
+            cli_task = TASK_INSTALLATION_DIAGNOSTIC;
             force_cli = true;
         } else if (strcmp(argv[i], "--select") == 0) {
             force_gui = true;

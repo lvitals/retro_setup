@@ -117,6 +117,17 @@ bool playlist_generate_for_platform(const PlatformInfo* platform, const char* ra
     char playlist_file[4096];
     snprintf(playlist_file, sizeof(playlist_file), "%.2000s/%.500s.lpl", playlist_dir, platform->name);
 
+    if (!platform->core_file[0]) {
+        if (fs_exists(playlist_file)) {
+            fs_remove_file(playlist_file);
+            log_add(LOG_LEVEL_WARN, "Removed incompatible playlist association: %s", playlist_file);
+        }
+        log_add(LOG_LEVEL_WARN,
+                "Playlist not generated for %s: no compatible libretro core is configured; external emulator required.",
+                platform->name);
+        return false;
+    }
+
     char rom_dir[4096];
     snprintf(rom_dir, sizeof(rom_dir), "%.2000s/%.200s", rom_base_dir, platform->id);
 

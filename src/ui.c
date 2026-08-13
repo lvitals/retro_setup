@@ -27,7 +27,8 @@ static const MenuOption g_menu_options[] = {
     { TASK_UNINSTALL, "--uninstall", "UNINSTALL PLATFORMS",         "Remove ROMs, cores, playlists, and BIOS",                        { 231,  76,  60, 255 } },
     { TASK_THUMBNAILS,"--thumbnails", "DOWNLOAD THUMBNAILS",        "Download boxart, snaps, and title artwork",                        { 155,  89, 182, 255 } },
     { TASK_IMPLODE,   "--implode",   "RESET CONFIGURATION",         "Reset local configuration and clear generated files",            { 192,  57,  43, 255 } },
-    { TASK_STATUS,    "--status",    "SYSTEM STATUS",               "View system distribution, mode, and saved settings",              { 241, 196,  15, 255 } }
+    { TASK_STATUS,    "--status",    "SYSTEM STATUS",               "View system distribution, mode, and saved settings",              { 241, 196,  15, 255 } },
+    { TASK_INSTALLATION_DIAGNOSTIC, "--diagnostic", "INSTALLATION DIAGNOSTIC", "Audit platform health, obsolete installs, and configured URLs", { 26, 188, 156, 255 } }
 };
 
 #define MENU_OPTION_COUNT (sizeof(g_menu_options)/sizeof(g_menu_options[0]))
@@ -104,7 +105,8 @@ static void draw_option_icon(SDL_Renderer* r, TaskType task, int x, int y, int s
             theme_draw_filled_rect(r, cx - 7, cy - 4, 3, 3, bg_color);
             break;
         }
-        case TASK_STATUS: { // Bar Chart Dashboard Icon 📊
+        case TASK_STATUS:
+        case TASK_INSTALLATION_DIAGNOSTIC: { // Bar Chart Dashboard Icon 📊
             theme_draw_filled_rect(r, cx - 16, cy - 12, 32, 20, white);
             theme_draw_filled_rect(r, cx - 13, cy - 9, 26, 14, bg_color);
             theme_draw_filled_rect(r, cx - 3, cy + 8, 6, 4, white);
@@ -567,11 +569,15 @@ static int log_visual_line_count(void) {
     return count;
 }
 
-static void draw_log_visual_lines(SDL_Rect region) {
+static int draw_log_visual_lines(SDL_Rect region, int scroll_from_bottom) {
     const int line_height = 18;
     int capacity = (region.h - 12) / line_height;
-    if (capacity < 1) return;
-    int skip = log_visual_line_count() - capacity;
+    if (capacity < 1) return 0;
+    int total = log_visual_line_count();
+    int max_scroll = total > capacity ? total - capacity : 0;
+    if (scroll_from_bottom > max_scroll) scroll_from_bottom = max_scroll;
+    if (scroll_from_bottom < 0) scroll_from_bottom = 0;
+    int skip = total - capacity - scroll_from_bottom;
     if (skip < 0) skip = 0;
     int visual_index = 0;
     int drawn = 0;
@@ -600,6 +606,7 @@ static void draw_log_visual_lines(SDL_Rect region) {
         } while (cursor && drawn < capacity);
     }
     SDL_RenderSetClipRect(g_ui.renderer, NULL);
+    return max_scroll;
 }
 
 static void draw_task_modal(void) {
@@ -730,7 +737,32 @@ static void draw_task_modal(void) {
 
     theme_draw_filled_rect(g_ui.renderer, term_x, term_y, term_w, term_h, (ThemeColor){ 10, 12, 18, 255 });
     theme_draw_border_rect(g_ui.renderer, term_x, term_y, term_w, term_h, 1, COLOR_BORDER_DEFAULT);
-    draw_log_visual_lines((SDL_Rect){term_x, term_y, term_w, term_h});
+    int max_log_scroll = draw_log_visual_lines((SDL_Rect){term_x, term_y, term_w, term_h}, g_ui.task_log_scroll_lines);
+    if (g_ui.task_log_scroll_lines > max_log_scroll) g_ui.task_log_scroll_lines = max_log_scroll;
+    if (max_log_scroll > 0) {
+        char position[64];
+        snprintf(position, sizeof(position), "LOG %d/%d", max_log_scroll - g_ui.task_log_scroll_lines + 1, max_log_scroll + 1);
+        int position_w = 0;
+        font_get_text_size(position, FONT_SCALE_BODY, &position_w, NULL);
+        theme_draw_filled_rect(g_ui.renderer, term_x + term_w - position_w - 14, term_y + 2, position_w + 10, 18, (ThemeColor){10, 12, 18, 255});
+        font_draw_text(g_ui.renderer, term_x + term_w - position_w - 9, term_y + 3, position, FONT_SCALE_BODY,
+                       COLOR_TEXT_MUTED.r, COLOR_TEXT_MUTED.g, COLOR_TEXT_MUTED.b, 255);
+        int track_x = term_x + term_w - 5;
+        int track_y = term_y + 22;
+        int track_h = term_h - 26;
+        if (track_h > 8) {
+            theme_draw_filled_rect(g_ui.renderer, track_x, track_y, 3, track_h, COLOR_SURFACE);
+            int total_lines = log_visual_line_count();
+            int visible_lines = (term_h - 12) / 18;
+            int thumb_h = total_lines > 0 ? track_h * visible_lines / total_lines : track_h;
+            if (thumb_h < 8) thumb_h = 8;
+            if (thumb_h > track_h) thumb_h = track_h;
+            int travel = track_h - thumb_h;
+            int from_top = max_log_scroll - g_ui.task_log_scroll_lines;
+            int thumb_y = track_y + (max_log_scroll > 0 ? travel * from_top / max_log_scroll : 0);
+            theme_draw_filled_rect(g_ui.renderer, track_x, thumb_y, 3, thumb_h, COLOR_PRIMARY);
+        }
+    }
 
     // Action Buttons (Pause / Resume / Cancel / Close)
     int mx, my;
@@ -1149,6 +1181,9 @@ static void handle_events(void) {
             if (g_ui.view == VIEW_STATUS) {
                 g_ui.status_scroll_y -= e.wheel.y * 36;
                 if (g_ui.status_scroll_y < 0) g_ui.status_scroll_y = 0;
+            } else if (g_ui.view == VIEW_TASK_RUNNING) {
+                g_ui.task_log_scroll_lines += e.wheel.y * 3;
+                if (g_ui.task_log_scroll_lines < 0) g_ui.task_log_scroll_lines = 0;
             }
         } else if (e.type == SDL_KEYDOWN) {
             SDL_Keycode key = e.key.keysym.sym;
@@ -1216,12 +1251,21 @@ static void handle_events(void) {
             if (g_ui.view == VIEW_TASK_RUNNING) {
                 if (task_is_finished() && (key == SDLK_RETURN || key == SDLK_ESCAPE || key == SDLK_SPACE)) {
                     g_ui.view = VIEW_MAIN_MENU;
+                    g_ui.task_log_scroll_lines = 0;
                     audio_play_sound(SOUND_SELECT);
-                } else if (!task_is_finished()) {
-                    if (key == SDLK_p) {
+                } else {
+                    if (key == SDLK_UP) g_ui.task_log_scroll_lines++;
+                    else if (key == SDLK_DOWN && g_ui.task_log_scroll_lines > 0) g_ui.task_log_scroll_lines--;
+                    else if (key == SDLK_PAGEUP) g_ui.task_log_scroll_lines += 10;
+                    else if (key == SDLK_PAGEDOWN) {
+                        g_ui.task_log_scroll_lines -= 10;
+                        if (g_ui.task_log_scroll_lines < 0) g_ui.task_log_scroll_lines = 0;
+                    } else if (key == SDLK_HOME) g_ui.task_log_scroll_lines = 1000000;
+                    else if (key == SDLK_END) g_ui.task_log_scroll_lines = 0;
+                    else if (!task_is_finished() && key == SDLK_p) {
                         task_toggle_pause();
                         audio_play_sound(SOUND_TOGGLE);
-                    } else if (key == SDLK_ESCAPE) {
+                    } else if (!task_is_finished() && key == SDLK_ESCAPE) {
                         task_cancel();
                         audio_play_sound(SOUND_BACK);
                     }

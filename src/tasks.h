@@ -12,7 +12,8 @@ typedef enum {
     TASK_UNINSTALL,
     TASK_THUMBNAILS,
     TASK_IMPLODE,
-    TASK_STATUS
+    TASK_STATUS,
+    TASK_INSTALLATION_DIAGNOSTIC
 } TaskType;
 
 const char* task_get_title(TaskType task);

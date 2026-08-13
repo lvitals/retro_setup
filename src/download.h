@@ -67,6 +67,8 @@ void download_cleanup(void);
 void download_manager_reset(void);
 void download_manager_snapshot(DownloadManagerSnapshot* snapshot);
 const char* download_state_name(DownloadState state);
+bool download_check_url(const char* url, long* http_status, curl_off_t* remote_size,
+                        char* error, size_t error_size);
 
 bool download_file(const char* url, const char* destination_path,
                    DownloadProgressCallback progress_cb, void* user_data,

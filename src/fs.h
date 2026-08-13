@@ -18,6 +18,7 @@ bool fs_remove_dir_recursive(const char* path, const char* allowed_root);
 
 // Extract ZIP, TAR, 7Z archive using libarchive
 bool fs_extract_archive(const char* archive_path, const char* dest_dir);
+bool fs_validate_archive(const char* archive_path, char* error, size_t error_size);
 
 void fs_join_path(char* out, size_t out_size, const char* p1, const char* p2);
 void fs_get_filename(char* out, size_t out_size, const char* path);

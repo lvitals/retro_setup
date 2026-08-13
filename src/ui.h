@@ -39,6 +39,7 @@ typedef struct {
     int filtered_count;
 
     int status_scroll_y;
+    int task_log_scroll_lines;
     SystemDiagnosticReport status_report;
 
     float anim_timer;
