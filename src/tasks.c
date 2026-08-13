@@ -22,6 +22,8 @@ typedef struct {
     float progress;
     char status_message[256];
     SDL_Thread* thread;
+    SDL_atomic_t work_completed;
+    SDL_atomic_t work_total;
 } TaskManager;
 
 static TaskManager g_task_mgr;
@@ -53,11 +55,13 @@ static bool process_platform_downloads(PlatformInfo* p) {
         snprintf(core_url, sizeof(core_url), "%s/%s.zip", core_base_url, p->core_file);
 
         char core_zip[MAX_PATH_LEN];
-        fs_join_path(core_zip, sizeof(core_zip), g_config.config_dir, "core_tmp.zip");
+        char core_zip_name[300];
+        snprintf(core_zip_name, sizeof(core_zip_name), "%s.zip", p->core_file);
+        fs_join_path(core_zip, sizeof(core_zip), g_config.config_dir, core_zip_name);
 
         DownloadResult dl;
         if (download_file(core_url, core_zip, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl)) {
-            log_add(LOG_LEVEL_INFO, "Extracting core %s...", p->core_file);
+            log_add(LOG_LEVEL_INFO, "[EXTRACT] %s", core_zip_name);
             fs_extract_archive(core_zip, cores_dir);
             fs_remove_file(core_zip);
         } else {
@@ -98,6 +102,7 @@ static bool process_platform_downloads(PlatformInfo* p) {
         DownloadResult dl;
         if (download_file(bios_urls[b], bios_dst, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl)) {
             if (strstr(fn, ".zip") || strstr(fn, ".7z")) {
+                log_add(LOG_LEVEL_INFO, "[EXTRACT] %s", fn);
                 fs_extract_archive(bios_dst, sys_dir);
             }
         } else {
@@ -145,7 +150,7 @@ static bool process_platform_downloads(PlatformInfo* p) {
             log_add(LOG_LEVEL_INFO, "Downloading ROM pack for %s: %s", p->id, rfn);
             if (download_file(rom_urls[r], rom_dst, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl)) {
                 if (strstr(rfn, ".zip") || strstr(rfn, ".7z") || strstr(rfn, ".rar") || strstr(rfn, ".tar")) {
-                    log_add(LOG_LEVEL_INFO, "Extracting ROM archive %s...", rfn);
+                    log_add(LOG_LEVEL_INFO, "[EXTRACT] %s", rfn);
                     if (fs_extract_archive(rom_dst, platform_rom_dir)) {
                         FILE* mf = fopen(marker_file, "w");
                         if (mf) {
@@ -173,7 +178,8 @@ static int SDLCALL platform_install_worker_thread(void* data) {
             SDL_AtomicAdd(args->error_counter, 1);
         }
         int comp = SDL_AtomicAdd(args->processed_counter, 1) + 1;
-        g_task_mgr.progress = (float)comp / (float)args->total_selected;
+        SDL_AtomicSet(&g_task_mgr.work_completed, comp);
+        g_task_mgr.progress = (float)comp / (float)(args->total_selected + 1);
         snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message),
                  "Installed %s (%d/%d completed)...", args->platform->name, comp, args->total_selected);
     }
@@ -193,12 +199,16 @@ static int do_task_install(void) {
     }
 
     url_config_load(g_config.url_config_file);
+    download_manager_reset();
+    SDL_AtomicSet(&g_task_mgr.work_completed, 0);
+    SDL_AtomicSet(&g_task_mgr.work_total, selected_cnt + 1); /* platforms plus playlist generation */
 
     SDL_atomic_t error_counter;
     SDL_AtomicSet(&error_counter, 0);
 
     if (g_config.use_parallel_downloads && selected_cnt > 1) {
-        int max_workers = (g_config.max_parallel_downloads > 0) ? g_config.max_parallel_downloads : 3;
+        int max_workers = (g_config.max_parallel_downloads > 0) ? g_config.max_parallel_downloads : MAX_PARALLEL_DOWNLOADS;
+        if (max_workers > MAX_PARALLEL_DOWNLOADS) max_workers = MAX_PARALLEL_DOWNLOADS;
         log_add(LOG_LEVEL_INFO, "Starting multi-threaded parallel installation (Max %d concurrent connections)...", max_workers);
 
         SDL_sem* sem = SDL_CreateSemaphore(max_workers);
@@ -247,7 +257,7 @@ static int do_task_install(void) {
 
             PlatformInfo* p = &g_platforms[i];
             processed++;
-            g_task_mgr.progress = (float)processed / (float)selected_cnt;
+            g_task_mgr.progress = (float)(processed - 1) / (float)(selected_cnt + 1);
 
             log_add(LOG_LEVEL_INFO, "[%d/%d] Processing %s (%s)...", processed, selected_cnt, p->name, p->id);
             snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Installing %s (%d/%d)...", p->name, processed, selected_cnt);
@@ -255,6 +265,8 @@ static int do_task_install(void) {
             if (!process_platform_downloads(p)) {
                 SDL_AtomicAdd(&error_counter, 1);
             }
+            SDL_AtomicSet(&g_task_mgr.work_completed, processed);
+            g_task_mgr.progress = (float)processed / (float)(selected_cnt + 1);
         }
     }
 
@@ -264,6 +276,7 @@ static int do_task_install(void) {
     log_add(LOG_LEVEL_INFO, "Generating RetroArch Playlists...");
     snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Generating playlists...");
     playlist_generate_selected(g_config.ra_dir, g_config.rom_dir);
+    SDL_AtomicSet(&g_task_mgr.work_completed, selected_cnt + 1);
 
     int err_count = SDL_AtomicGet(&error_counter);
     if (err_count > 0) {
@@ -309,14 +322,11 @@ void tasks_cleanup(void) {
 
 static void download_progress_cb(const DownloadResult* result, void* user_data) {
     (void)user_data;
-    if (result && result->total_bytes > 0) {
-        g_task_mgr.progress = (float)result->downloaded_bytes / (float)result->total_bytes;
+    if (result) {
         snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message),
-                 "%s Downloading: %.1f MB / %.1f MB (%.0f%%)",
-                 g_task_mgr.pause_requested ? "[PAUSED]" : "",
-                 (double)result->downloaded_bytes / (1024.0 * 1024.0),
-                 (double)result->total_bytes / (1024.0 * 1024.0),
-                 (double)g_task_mgr.progress * 100.0);
+                 "%s %s (%.1f MB/s)", download_state_name(result->state),
+                 g_task_mgr.pause_requested ? "- paused" : "- transfer in progress",
+                 result->speed_bytes_per_sec / (1024.0 * 1024.0));
     }
 }
 
@@ -417,32 +427,98 @@ static int do_task_uninstall(void) {
     char home[MAX_PATH_LEN];
     get_home_dir(home, sizeof(home));
 
+    SDL_AtomicSet(&g_task_mgr.work_completed, 0);
+    SDL_AtomicSet(&g_task_mgr.work_total, selected_cnt);
     int processed = 0;
+    int failures = 0;
     for (int i = 0; i < TOTAL_PLATFORMS; i++) {
         if (g_task_mgr.cancel_requested) break;
         if (!g_platforms[i].selected) continue;
 
         PlatformInfo* p = &g_platforms[i];
         processed++;
-        g_task_mgr.progress = (float)processed / (float)selected_cnt;
+        g_task_mgr.progress = (float)(processed - 1) / (float)selected_cnt;
+        snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message),
+                 "Uninstalling %s (%d/%d)...", p->name, processed, selected_cnt);
 
         log_add(LOG_LEVEL_INFO, "Uninstalling %s (%s)...", p->name, p->id);
 
         char p_rom_dir[MAX_PATH_LEN];
         fs_join_path(p_rom_dir, sizeof(p_rom_dir), g_config.rom_dir, p->id);
         if (fs_exists(p_rom_dir)) {
-            fs_remove_dir_recursive(p_rom_dir, home);
+            if (fs_remove_dir_recursive(p_rom_dir, g_config.rom_dir))
+                log_add(LOG_LEVEL_INFO, "[REMOVE] ROM directory: %s", p_rom_dir);
+            else { log_add(LOG_LEVEL_ERROR, "[FAILED] Could not remove ROM directory: %s", p_rom_dir); failures++; }
         }
 
         char playlist_file[MAX_PATH_LEN];
         snprintf(playlist_file, sizeof(playlist_file), "%.1000s/playlists/%.500s.lpl", g_config.ra_dir, p->name);
-        fs_remove_file(playlist_file);
+        if (fs_exists(playlist_file) && fs_remove_file(playlist_file))
+            log_add(LOG_LEVEL_INFO, "[REMOVE] Playlist: %s", playlist_file);
+
+        char thumb_dir[MAX_PATH_LEN];
+        snprintf(thumb_dir, sizeof(thumb_dir), "%.1000s/thumbnails/%.500s", g_config.ra_dir, p->name);
+        if (fs_exists(thumb_dir)) {
+            if (fs_remove_dir_recursive(thumb_dir, g_config.ra_dir))
+                log_add(LOG_LEVEL_INFO, "[REMOVE] Thumbnails: %s", thumb_dir);
+            else failures++;
+        }
 
         char core_file[MAX_PATH_LEN];
         snprintf(core_file, sizeof(core_file), "%.1000s/cores/%.500s", g_config.ra_dir, p->core_file);
-        fs_remove_file(core_file);
+        bool core_still_needed = false;
+        for (int k = 0; k < TOTAL_PLATFORMS; ++k) {
+            if (!g_platforms[k].selected && strcmp(g_platforms[k].core_file, p->core_file) == 0) {
+                core_still_needed = true;
+                break;
+            }
+        }
+        if (!core_still_needed && fs_exists(core_file) && fs_remove_file(core_file))
+            log_add(LOG_LEVEL_INFO, "[REMOVE] Core: %s", core_file);
+        else if (core_still_needed)
+            log_add(LOG_LEVEL_INFO, "[KEEP] Shared core still used: %s", p->core_file);
+
+        char info_name[160], info_file[MAX_PATH_LEN];
+        snprintf(info_name, sizeof(info_name), "%s", p->core_file);
+        char* so = strstr(info_name, ".so");
+        if (so) snprintf(so, sizeof(info_name) - (size_t)(so - info_name), ".info");
+        snprintf(info_file, sizeof(info_file), "%.1000s/info/%.500s", g_config.ra_dir, info_name);
+        fs_remove_file(info_file);
+        snprintf(info_file, sizeof(info_file), "%.1000s/core_info/%.500s", g_config.ra_dir, info_name);
+        fs_remove_file(info_file);
+
+        char bios_copy[sizeof(p->bios_files)];
+        snprintf(bios_copy, sizeof(bios_copy), "%s", p->bios_files);
+        char* save = NULL;
+        for (char* bios = strtok_r(bios_copy, " ,;", &save); bios; bios = strtok_r(NULL, " ,;", &save)) {
+            bool bios_still_needed = false;
+            for (int k = 0; k < TOTAL_PLATFORMS; ++k) {
+                if (!g_platforms[k].selected && strstr(g_platforms[k].bios_files, bios)) {
+                    bios_still_needed = true;
+                    break;
+                }
+            }
+            if (bios_still_needed) {
+                log_add(LOG_LEVEL_INFO, "[KEEP] Shared BIOS still used: %s", bios);
+                continue;
+            }
+            char bios_path[MAX_PATH_LEN];
+            fs_join_path(bios_path, sizeof(bios_path), g_config.ra_dir, "system");
+            char full_bios[MAX_PATH_LEN];
+            fs_join_path(full_bios, sizeof(full_bios), bios_path, bios);
+            if (fs_exists(full_bios) && fs_remove_file(full_bios))
+                log_add(LOG_LEVEL_INFO, "[REMOVE] BIOS: %s", full_bios);
+        }
+        SDL_AtomicSet(&g_task_mgr.work_completed, processed);
+        g_task_mgr.progress = (float)processed / (float)selected_cnt;
     }
 
+    if (g_task_mgr.cancel_requested) return -1;
+    if (failures) {
+        snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Uninstallation completed with %d error(s).", failures);
+        log_add(LOG_LEVEL_ERROR, "=== Uninstallation Finished with %d Error(s) ===", failures);
+        return 1;
+    }
     g_task_mgr.progress = 1.0f;
     snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Uninstallation completed!");
     log_add(LOG_LEVEL_INFO, "=== Uninstallation Completed ===");
@@ -557,6 +633,9 @@ bool task_start_async(TaskType task, const char* extra_args) {
     g_task_mgr.pause_requested = false;
     g_task_mgr.exit_code = 0;
     g_task_mgr.progress = 0.0f;
+    SDL_AtomicSet(&g_task_mgr.work_completed, 0);
+    SDL_AtomicSet(&g_task_mgr.work_total, 1);
+    download_manager_reset();
     snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Starting %s...", task_get_title(task));
 
     g_task_mgr.thread = SDL_CreateThread(task_worker_thread, "TaskWorker", (void*)(uintptr_t)task);
@@ -593,6 +672,13 @@ bool task_is_finished(void) { return g_task_mgr.is_finished; }
 int task_get_exit_code(void) { return g_task_mgr.exit_code; }
 float task_get_progress(void) { return g_task_mgr.progress; }
 const char* task_get_status_message(void) { return g_task_mgr.status_message; }
+void task_get_work_counts(int* completed, int* total) {
+    if (completed) *completed = SDL_AtomicGet(&g_task_mgr.work_completed);
+    if (total) *total = SDL_AtomicGet(&g_task_mgr.work_total);
+}
+void task_get_download_snapshot(DownloadManagerSnapshot* snapshot) {
+    download_manager_snapshot(snapshot);
+}
 
 int task_run_sync(TaskType task) {
     log_clear();

@@ -512,6 +512,96 @@ static void draw_platform_selector(void) {
     draw_footer_bar();
 }
 
+static void format_transfer_size(curl_off_t bytes, char* out, size_t out_size) {
+    if (bytes < 0) snprintf(out, out_size, "?");
+    else if (bytes >= 1073741824) snprintf(out, out_size, "%.1f GB", (double)bytes / 1073741824.0);
+    else if (bytes >= 1048576) snprintf(out, out_size, "%.1f MB", (double)bytes / 1048576.0);
+    else if (bytes >= 1024) snprintf(out, out_size, "%.1f KB", (double)bytes / 1024.0);
+    else snprintf(out, out_size, "%lld B", (long long)bytes);
+}
+
+static int hex_digit_value(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* Display-only cleanup: keep the transfer destination untouched. */
+static void format_download_name(const DownloadTask* task, char* out, size_t out_size) {
+    const char* name = task && task->filename[0] ? task->filename : "download";
+    const char* slash = strrchr(name, '/');
+    if (slash && slash[1]) name = slash + 1;
+    size_t written = 0;
+    while (*name && *name != '?' && *name != '#' && written + 1 < out_size) {
+        if (name[0] == '%' && name[1] && name[2]) {
+            int hi = hex_digit_value(name[1]);
+            int lo = hex_digit_value(name[2]);
+            if (hi >= 0 && lo >= 0) {
+                out[written++] = (char)((hi << 4) | lo);
+                name += 3;
+                continue;
+            }
+        }
+        out[written++] = *name++;
+    }
+    out[written] = 0;
+}
+
+static void draw_progress_bar(int x, int y, int w, int h, float progress, ThemeColor color) {
+    if (progress < 0.0f) progress = 0.0f;
+    if (progress > 1.0f) progress = 1.0f;
+    theme_draw_filled_rect(g_ui.renderer, x, y, w, h, COLOR_SURFACE);
+    theme_draw_border_rect(g_ui.renderer, x, y, w, h, 1, COLOR_BORDER_DEFAULT);
+    int fill = (int)((w - 2) * progress);
+    if (fill > 0) theme_draw_filled_rect(g_ui.renderer, x + 1, y + 1, fill, h - 2, color);
+}
+
+static int log_visual_line_count(void) {
+    int count = 0;
+    for (int i = 0; i < log_get_count(); ++i) {
+        const char* text = log_get_line(i);
+        count++;
+        for (; *text; ++text) if (*text == '\n') count++;
+    }
+    return count;
+}
+
+static void draw_log_visual_lines(SDL_Rect region) {
+    const int line_height = 18;
+    int capacity = (region.h - 12) / line_height;
+    if (capacity < 1) return;
+    int skip = log_visual_line_count() - capacity;
+    if (skip < 0) skip = 0;
+    int visual_index = 0;
+    int drawn = 0;
+    SDL_RenderSetClipRect(g_ui.renderer, &region);
+    for (int i = 0; i < log_get_count() && drawn < capacity; ++i) {
+        const char* cursor = log_get_line(i);
+        ThemeColor color = COLOR_TEXT_SECONDARY;
+        if (strstr(cursor, "ERROR") || strstr(cursor, "FAILED")) color = COLOR_ERROR;
+        else if (strstr(cursor, "WARNING") || strstr(cursor, "WARN")) color = COLOR_WARNING;
+        else if (strstr(cursor, "=== ")) color = COLOR_SUCCESS;
+        do {
+            const char* newline = strchr(cursor, '\n');
+            size_t length = newline ? (size_t)(newline - cursor) : strlen(cursor);
+            if (visual_index++ >= skip) {
+                char line[LOG_LINE_LEN];
+                if (length >= sizeof(line)) length = sizeof(line) - 1;
+                memcpy(line, cursor, length);
+                line[length] = 0;
+                font_draw_text_truncated(g_ui.renderer, region.x + 10,
+                                         region.y + 7 + drawn * line_height, line,
+                                         FONT_SCALE_BODY, region.w - 20,
+                                         color.r, color.g, color.b, 255);
+                drawn++;
+            }
+            cursor = newline ? newline + 1 : NULL;
+        } while (cursor && drawn < capacity);
+    }
+    SDL_RenderSetClipRect(g_ui.renderer, NULL);
+}
+
 static void draw_task_modal(void) {
     theme_draw_filled_rect(g_ui.renderer, 0, 0, g_ui.window_width, g_ui.window_height, (ThemeColor){ 0, 0, 0, 210 });
 
@@ -523,63 +613,124 @@ static void draw_task_modal(void) {
     theme_draw_gradient_panel(g_ui.renderer, modal_x, modal_y, modal_w, modal_h, COLOR_BG_PANEL, COLOR_BG_DARK);
     theme_draw_border_rect(g_ui.renderer, modal_x, modal_y, modal_w, modal_h, 3, COLOR_PRIMARY);
 
-    // Modal Header
-    font_draw_text_shadow(g_ui.renderer, modal_x + 20, modal_y + 20, task_get_title(g_ui.modal_task), FONT_SCALE_TITLE, COLOR_PRIMARY.r, COLOR_PRIMARY.g, COLOR_PRIMARY.b, 255);
+    int pad = 20;
+    int content_x = modal_x + pad;
+    int content_w = modal_w - pad * 2;
+    font_draw_text_shadow(g_ui.renderer, content_x, modal_y + 16, task_get_title(g_ui.modal_task), FONT_SCALE_TITLE, COLOR_PRIMARY.r, COLOR_PRIMARY.g, COLOR_PRIMARY.b, 255);
 
-    // Status Message
-    font_draw_text_truncated(g_ui.renderer, modal_x + 20, modal_y + 54, task_get_status_message(), FONT_SCALE_BODY, modal_w - 40, COLOR_TEXT_PRIMARY.r, COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
+    DownloadManagerSnapshot downloads;
+    task_get_download_snapshot(&downloads);
+    int work_done = 0, work_total = 0;
+    task_get_work_counts(&work_done, &work_total);
+    float byte_progress = downloads.total_bytes > 0 ? (float)((double)downloads.downloaded_bytes / (double)downloads.total_bytes) : 0.0f;
+    float stage_progress = (g_ui.modal_task == TASK_INSTALL || g_ui.modal_task == TASK_UNINSTALL)
+                         ? (work_total > 0 ? (float)work_done / (float)work_total : 0.0f)
+                         : task_get_progress();
+    float progress = downloads.total_bytes > 0 ? byte_progress * 0.85f + stage_progress * 0.15f : stage_progress;
+    if (!task_is_finished() && progress >= 1.0f) progress = 0.99f;
+    if (task_is_finished() && task_get_exit_code() == 0) progress = 1.0f;
+    if (task_is_finished() && task_get_exit_code() != 0 && progress >= 1.0f) progress = 0.99f;
+    char got[32], expected[32], speed[32], overall[256];
+    format_transfer_size(downloads.downloaded_bytes, got, sizeof(got));
+    format_transfer_size(downloads.total_bytes > 0 ? downloads.total_bytes : -1, expected, sizeof(expected));
+    format_transfer_size((curl_off_t)downloads.speed_bytes_per_sec, speed, sizeof(speed));
+    int col1_x = content_x;
+    int col2_x = content_x + content_w * 23 / 100;
+    int col3_x = content_x + content_w * 43 / 100;
+    snprintf(overall, sizeof(overall), "Overall: %d%%", (int)(progress * 100.0f));
+    font_draw_text(g_ui.renderer, col1_x, modal_y + 47, overall, FONT_SCALE_BODY,
+                   COLOR_TEXT_PRIMARY.r, COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
+    snprintf(overall, sizeof(overall), "Tasks: %d/%d", work_done, work_total);
+    font_draw_text(g_ui.renderer, col2_x, modal_y + 47, overall, FONT_SCALE_BODY,
+                   COLOR_TEXT_PRIMARY.r, COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
+    snprintf(overall, sizeof(overall), "Downloaded: %s / %s", got, expected);
+    font_draw_text_truncated(g_ui.renderer, col3_x, modal_y + 47, overall, FONT_SCALE_BODY,
+                             content_x + content_w - col3_x, COLOR_TEXT_PRIMARY.r,
+                             COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
 
-    // Progress Bar
-    int bar_x = modal_x + 20;
-    int bar_y = modal_y + 80;
-    int bar_w = modal_w - 40;
-    int bar_h = 28;
+    snprintf(overall, sizeof(overall), "Speed: %s/s", speed);
+    font_draw_text(g_ui.renderer, col1_x, modal_y + 67, overall, FONT_SCALE_BODY,
+                   COLOR_TEXT_SECONDARY.r, COLOR_TEXT_SECONDARY.g, COLOR_TEXT_SECONDARY.b, 255);
+    snprintf(overall, sizeof(overall), "Active: %d", downloads.active_count);
+    font_draw_text(g_ui.renderer, col2_x, modal_y + 67, overall, FONT_SCALE_BODY,
+                   COLOR_TEXT_SECONDARY.r, COLOR_TEXT_SECONDARY.g, COLOR_TEXT_SECONDARY.b, 255);
+    snprintf(overall, sizeof(overall), "Queued: %d", downloads.queued_count);
+    font_draw_text(g_ui.renderer, col3_x, modal_y + 67, overall, FONT_SCALE_BODY,
+                   COLOR_TEXT_SECONDARY.r, COLOR_TEXT_SECONDARY.g, COLOR_TEXT_SECONDARY.b, 255);
 
-    theme_draw_filled_rect(g_ui.renderer, bar_x, bar_y, bar_w, bar_h, COLOR_SURFACE);
-    theme_draw_border_rect(g_ui.renderer, bar_x, bar_y, bar_w, bar_h, 2, COLOR_BORDER_DEFAULT);
+    int bar_y = modal_y + 88;
+    draw_progress_bar(content_x, bar_y, content_w, 16, progress, COLOR_SUCCESS);
+    char pct[20]; snprintf(pct, sizeof(pct), "%d%%", (int)(progress * 100.0f));
+    font_draw_text_shadow(g_ui.renderer, content_x + content_w / 2 - 16, bar_y + 1, pct, FONT_SCALE_BODY,
+                          COLOR_TEXT_PRIMARY.r, COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
 
-    float progress = task_get_progress();
-    if (progress >= 0.0f) {
-        int fill_w = (int)(bar_w * progress);
-        if (fill_w > bar_w) fill_w = bar_w;
-        theme_draw_gradient_panel(g_ui.renderer, bar_x, bar_y, fill_w, bar_h, COLOR_SUCCESS, (ThemeColor){ 39, 174, 96, 255 });
-
-        char pct[32];
-        snprintf(pct, sizeof(pct), "%d%%", (int)(progress * 100));
-        font_draw_text_shadow(g_ui.renderer, bar_x + fill_w / 2 - 16, bar_y + 6, pct, FONT_SCALE_BODY, COLOR_TEXT_PRIMARY.r, COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
-    } else {
-        float pulse = (sinf(g_ui.anim_timer * 8.0f) + 1.0f) * 0.5f;
-        int fill_w = (int)(bar_w * pulse);
-        theme_draw_gradient_panel(g_ui.renderer, bar_x, bar_y, fill_w, bar_h, COLOR_SECONDARY, (ThemeColor){ 41, 128, 185, 200 });
-        font_draw_text_shadow(g_ui.renderer, bar_x + bar_w / 2 - 60, bar_y + 6, "PROCESSING...", FONT_SCALE_BODY, COLOR_TEXT_PRIMARY.r, COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
+    int active_indices[MAX_PARALLEL_DOWNLOADS];
+    int shown = 0;
+    for (int i = 0; i < downloads.task_count && shown < MAX_PARALLEL_DOWNLOADS; ++i) {
+        DownloadTask* t = &downloads.tasks[i];
+        if (t->state != DOWNLOAD_DOWNLOADING && t->state != DOWNLOAD_RESUMING && t->state != DOWNLOAD_PAUSED &&
+            t->state != DOWNLOAD_CHECKING) continue;
+        active_indices[shown++] = i;
     }
 
-    // Terminal Log Window
-    int term_x = modal_x + 20;
-    int term_y = bar_y + bar_h + 16;
-    int term_w = modal_w - 40;
-    int term_h = modal_h - (term_y - modal_y) - 64;
+    const int section_gap = 10;
+    int dynamic_y = bar_y + 16 + section_gap;
+    int dynamic_h = shown > 0 ? 19 + shown * 40 : 48;
+    int actions_y = modal_y + modal_h - 50;
+    int max_dynamic_h = actions_y - dynamic_y - section_gap * 2 - 18;
+    if (dynamic_h > max_dynamic_h) dynamic_h = max_dynamic_h;
+    if (dynamic_h < 24) dynamic_h = 24;
+    SDL_Rect dynamic_region = {content_x, dynamic_y, content_w, dynamic_h};
+    theme_draw_filled_rect(g_ui.renderer, dynamic_region.x, dynamic_region.y,
+                           dynamic_region.w, dynamic_region.h, COLOR_BG_PANEL);
+    SDL_RenderSetClipRect(g_ui.renderer, &dynamic_region);
+    font_draw_text_shadow(g_ui.renderer, content_x, dynamic_y,
+                          shown > 0 ? "ACTIVE DOWNLOADS" : "STATUS", FONT_SCALE_BODY,
+                          COLOR_PRIMARY.r, COLOR_PRIMARY.g, COLOR_PRIMARY.b, 255);
+    int rows_y = dynamic_y + 19;
+    for (int shown_index = 0; shown_index < shown; ++shown_index) {
+        DownloadTask* t = &downloads.tasks[active_indices[shown_index]];
+        int row_h = 35;
+        int card_y = rows_y + shown_index * (row_h + 5);
+        char friendly_name[256], left[300], now[32], total[32], rate[32], right[360];
+        format_download_name(t, friendly_name, sizeof(friendly_name));
+        snprintf(left, sizeof(left), "[%d] %s%s", shown_index + 1, friendly_name,
+                 t->state == DOWNLOAD_PAUSED ? " [PAUSED]" : "");
+        format_transfer_size(t->downloaded_bytes, now, sizeof(now));
+        format_transfer_size(t->remote_size, total, sizeof(total));
+        format_transfer_size((curl_off_t)t->speed_bytes_per_sec, rate, sizeof(rate));
+        int item_pct = t->remote_size > 0 ? (int)(100.0 * (double)t->downloaded_bytes / (double)t->remote_size) : 0;
+        int eta = t->eta_seconds > 0 ? (int)t->eta_seconds : 0;
+        snprintf(right, sizeof(right), "%s/%s  %d%%  %s/s  ETA %02d:%02d", now, total, item_pct, rate, eta / 60, eta % 60);
+        int measured_details_w = 0;
+        font_get_text_size(right, FONT_SCALE_BODY, &measured_details_w, NULL);
+        int details_w = measured_details_w;
+        if (details_w > content_w * 64 / 100) details_w = content_w * 64 / 100;
+        int name_w = content_w - details_w - 12;
+        font_draw_text_truncated(g_ui.renderer, content_x, card_y + 2, left, FONT_SCALE_BODY, name_w,
+                                 COLOR_TEXT_PRIMARY.r, COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
+        font_draw_text_truncated(g_ui.renderer, content_x + name_w + 12, card_y + 2, right, FONT_SCALE_BODY, details_w,
+                                 COLOR_TEXT_SECONDARY.r, COLOR_TEXT_SECONDARY.g, COLOR_TEXT_SECONDARY.b, 255);
+        draw_progress_bar(content_x, card_y + 22, content_w, 7,
+                          t->remote_size > 0 ? (float)((double)t->downloaded_bytes / (double)t->remote_size) : 0.0f,
+                          t->state == DOWNLOAD_PAUSED ? COLOR_WARNING : COLOR_SECONDARY);
+    }
+    if (shown == 0) {
+        font_draw_text_truncated(g_ui.renderer, content_x, rows_y + 3, task_get_status_message(), FONT_SCALE_BODY, content_w,
+                                 COLOR_TEXT_SECONDARY.r, COLOR_TEXT_SECONDARY.g, COLOR_TEXT_SECONDARY.b, 255);
+    }
+    SDL_RenderSetClipRect(g_ui.renderer, NULL);
+
+    /* The log owns all space between the dynamic region and the action footer. */
+    int term_x = content_x;
+    int term_y = dynamic_region.y + dynamic_region.h + section_gap;
+    int term_w = content_w;
+    int term_h = actions_y - section_gap - term_y;
+    if (term_h < 18) term_h = 18;
 
     theme_draw_filled_rect(g_ui.renderer, term_x, term_y, term_w, term_h, (ThemeColor){ 10, 12, 18, 255 });
     theme_draw_border_rect(g_ui.renderer, term_x, term_y, term_w, term_h, 1, COLOR_BORDER_DEFAULT);
-
-    int max_lines_disp = term_h / 18;
-    int log_count = log_get_count();
-    int start_line = (log_count > max_lines_disp) ? (log_count - max_lines_disp) : 0;
-
-    for (int l = start_line; l < log_count; l++) {
-        int ly = term_y + 8 + (l - start_line) * 18;
-        const char* log_line = log_get_line(l);
-        ThemeColor line_color = COLOR_TEXT_SECONDARY;
-        if (strstr(log_line, "ERROR") || strstr(log_line, "FAILED")) {
-            line_color = COLOR_ERROR;
-        } else if (strstr(log_line, "WARNING") || strstr(log_line, "WARN")) {
-            line_color = COLOR_WARNING;
-        } else if (strstr(log_line, "=== ")) {
-            line_color = COLOR_SUCCESS;
-        }
-        font_draw_text_truncated(g_ui.renderer, term_x + 10, ly, log_line, FONT_SCALE_BODY, term_w - 20, line_color.r, line_color.g, line_color.b, 255);
-    }
+    draw_log_visual_lines((SDL_Rect){term_x, term_y, term_w, term_h});
 
     // Action Buttons (Pause / Resume / Cancel / Close)
     int mx, my;
@@ -630,6 +781,108 @@ static void draw_task_modal(void) {
     }
 }
 
+typedef struct {
+    SDL_Rect dialog;
+    int padding;
+    int text_x;
+    int text_w;
+    int body_y;
+    int button_y;
+    UIButton yes_button;
+    UIButton no_button;
+    UIButton cancel_button;
+} ParallelPromptLayout;
+
+static void setup_parallel_button(UIButton* button, const char* shortcut, const char* label, ThemeColor color) {
+    memset(button, 0, sizeof(*button));
+    button->shortcut = shortcut;
+    button->label = label;
+    button->scale = FONT_SCALE_BODY;
+    button->bg_color = color;
+    ui_button_measure(button, 0, 42);
+}
+
+static void calculate_parallel_prompt_layout(ParallelPromptLayout* layout) {
+    memset(layout, 0, sizeof(*layout));
+    layout->padding = 24;
+    setup_parallel_button(&layout->yes_button, "[Y]", "YES (PARALLEL)", COLOR_SUCCESS);
+    setup_parallel_button(&layout->no_button, "[N]", "NO (SEQUENTIAL)", COLOR_SECONDARY);
+    setup_parallel_button(&layout->cancel_button, "[ESC]", "CANCEL", COLOR_ERROR);
+
+    const int outer_margin = 16;
+    const int gap = 12;
+    int intrinsic_buttons = layout->yes_button.rect.w + layout->no_button.rect.w +
+                            layout->cancel_button.rect.w + gap * 2;
+    int minimum_w = intrinsic_buttons + layout->padding * 2 + 6;
+    int preferred_w = 900;
+    int available_w = g_ui.window_width - outer_margin * 2;
+    int dialog_w = preferred_w;
+    if (dialog_w > available_w) dialog_w = available_w;
+    if (dialog_w < minimum_w && available_w >= minimum_w) dialog_w = minimum_w;
+    if (dialog_w < 320) dialog_w = 320;
+
+    int dialog_h = 340;
+    int available_h = g_ui.window_height - outer_margin * 2;
+    if (dialog_h > available_h) dialog_h = available_h;
+    if (dialog_h < 260) dialog_h = 260;
+    layout->dialog = (SDL_Rect){(g_ui.window_width - dialog_w) / 2,
+                                (g_ui.window_height - dialog_h) / 2, dialog_w, dialog_h};
+    layout->text_x = layout->dialog.x + layout->padding;
+    layout->text_w = layout->dialog.w - layout->padding * 2;
+    layout->body_y = layout->dialog.y + 62;
+
+    int inner_w = layout->text_w;
+    int used_w = intrinsic_buttons;
+    int extra = inner_w - used_w;
+    if (extra > 0) {
+        int add = extra / 3;
+        layout->yes_button.rect.w += add;
+        layout->no_button.rect.w += add;
+        layout->cancel_button.rect.w += extra - add * 2;
+    }
+    int buttons_w = layout->yes_button.rect.w + layout->no_button.rect.w +
+                    layout->cancel_button.rect.w + gap * 2;
+    int button_x = layout->dialog.x + (layout->dialog.w - buttons_w) / 2;
+    layout->button_y = layout->dialog.y + layout->dialog.h - layout->padding - layout->yes_button.rect.h;
+    layout->yes_button.rect.x = button_x;
+    layout->yes_button.rect.y = layout->button_y;
+    layout->no_button.rect.x = button_x + layout->yes_button.rect.w + gap;
+    layout->no_button.rect.y = layout->button_y;
+    layout->cancel_button.rect.x = layout->no_button.rect.x + layout->no_button.rect.w + gap;
+    layout->cancel_button.rect.y = layout->button_y;
+}
+
+static int draw_wrapped_prompt_text(const char* text, int x, int y, int max_w, ThemeColor color) {
+    char line[256] = {0};
+    const char* cursor = text;
+    const int line_height = 20;
+    while (*cursor) {
+        while (*cursor == ' ') cursor++;
+        if (!*cursor) break;
+        const char* end = cursor;
+        while (*end && *end != ' ') end++;
+        size_t word_len = (size_t)(end - cursor);
+        char candidate[256];
+        snprintf(candidate, sizeof(candidate), "%s%s%.*s", line, line[0] ? " " : "", (int)word_len, cursor);
+        int candidate_w = 0;
+        font_get_text_size(candidate, FONT_SCALE_BODY, &candidate_w, NULL);
+        if (line[0] && candidate_w > max_w) {
+            font_draw_text_shadow(g_ui.renderer, x, y, line, FONT_SCALE_BODY, color.r, color.g, color.b, 255);
+            y += line_height;
+            snprintf(line, sizeof(line), "%.*s", (int)word_len, cursor);
+        } else {
+            snprintf(line, sizeof(line), "%s", candidate);
+        }
+        cursor = end;
+    }
+    if (line[0]) {
+        font_draw_text_shadow_truncated(g_ui.renderer, x, y, line, FONT_SCALE_BODY, max_w,
+                                        color.r, color.g, color.b, 255);
+        y += line_height;
+    }
+    return y;
+}
+
 static void draw_parallel_prompt_modal(void) {
     draw_background();
     draw_header_bar();
@@ -640,16 +893,19 @@ static void draw_parallel_prompt_modal(void) {
     SDL_Rect full_rect = { 0, 0, g_ui.window_width, g_ui.window_height };
     SDL_RenderFillRect(g_ui.renderer, &full_rect);
 
-    int modal_w = 660;
-    int modal_h = 320;
-    int modal_x = (g_ui.window_width - modal_w) / 2;
-    int modal_y = (g_ui.window_height - modal_h) / 2;
+    ParallelPromptLayout layout;
+    calculate_parallel_prompt_layout(&layout);
+    int modal_w = layout.dialog.w;
+    int modal_h = layout.dialog.h;
+    int modal_x = layout.dialog.x;
+    int modal_y = layout.dialog.y;
 
     theme_draw_gradient_panel(g_ui.renderer, modal_x, modal_y, modal_w, modal_h, COLOR_BG_PANEL, COLOR_BG_DARK);
     theme_draw_border_rect(g_ui.renderer, modal_x, modal_y, modal_w, modal_h, 3, COLOR_PRIMARY);
 
     theme_draw_filled_rect(g_ui.renderer, modal_x + 3, modal_y + 3, modal_w - 6, 40, COLOR_SURFACE_SELECTED);
-    font_draw_text_shadow(g_ui.renderer, modal_x + 16, modal_y + 12, "PARALLEL DOWNLOADS PROMPT", FONT_SCALE_HEADING, COLOR_PRIMARY.r, COLOR_PRIMARY.g, COLOR_PRIMARY.b, 255);
+    font_draw_text_shadow_truncated(g_ui.renderer, layout.text_x, modal_y + 12, "PARALLEL DOWNLOADS PROMPT",
+                                    FONT_SCALE_HEADING, layout.text_w, COLOR_PRIMARY.r, COLOR_PRIMARY.g, COLOR_PRIMARY.b, 255);
 
     int sel_cnt = get_selected_count();
     int max_workers = (g_config.max_parallel_downloads > 0) ? g_config.max_parallel_downloads : 3;
@@ -659,53 +915,19 @@ static void draw_parallel_prompt_modal(void) {
     snprintf(msg2, sizeof(msg2), "Would you like to enable multi-threaded parallel downloads?");
     snprintf(msg3, sizeof(msg3), "(Max %d simultaneous connections to protect server & network limits)", max_workers);
 
-    font_draw_text_shadow(g_ui.renderer, modal_x + 24, modal_y + 65, msg1, FONT_SCALE_BODY, COLOR_TEXT_PRIMARY.r, COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
-    font_draw_text_shadow(g_ui.renderer, modal_x + 24, modal_y + 95, msg2, FONT_SCALE_BODY, COLOR_TEXT_PRIMARY.r, COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
-    font_draw_text_shadow(g_ui.renderer, modal_x + 24, modal_y + 135, msg3, FONT_SCALE_BODY, COLOR_TEXT_MUTED.r, COLOR_TEXT_MUTED.g, COLOR_TEXT_MUTED.b, 255);
+    int text_y = layout.body_y;
+    text_y = draw_wrapped_prompt_text(msg1, layout.text_x, text_y, layout.text_w, COLOR_TEXT_PRIMARY) + 8;
+    text_y = draw_wrapped_prompt_text(msg2, layout.text_x, text_y, layout.text_w, COLOR_TEXT_PRIMARY) + 12;
+    draw_wrapped_prompt_text(msg3, layout.text_x, text_y, layout.text_w, COLOR_TEXT_MUTED);
 
     int mx, my;
     SDL_GetMouseState(&mx, &my);
-    int by = modal_y + modal_h - 60;
-
-    UIButton yes_btn, no_btn, cancel_btn;
-    memset(&yes_btn, 0, sizeof(yes_btn));
-    yes_btn.shortcut = "[Y]";
-    yes_btn.label = "YES (PARALLEL)";
-    yes_btn.scale = FONT_SCALE_BODY;
-    yes_btn.bg_color = COLOR_SUCCESS;
-    ui_button_measure(&yes_btn, 170, 42);
-
-    memset(&no_btn, 0, sizeof(no_btn));
-    no_btn.shortcut = "[N]";
-    no_btn.label = "NO (SEQUENTIAL)";
-    no_btn.scale = FONT_SCALE_BODY;
-    no_btn.bg_color = COLOR_SECONDARY;
-    ui_button_measure(&no_btn, 180, 42);
-
-    memset(&cancel_btn, 0, sizeof(cancel_btn));
-    cancel_btn.shortcut = "[ESC]";
-    cancel_btn.label = "CANCEL";
-    cancel_btn.scale = FONT_SCALE_BODY;
-    cancel_btn.bg_color = COLOR_ERROR;
-    ui_button_measure(&cancel_btn, 120, 42);
-
-    int total_w = yes_btn.rect.w + 14 + no_btn.rect.w + 14 + cancel_btn.rect.w;
-    int bx = modal_x + (modal_w - total_w) / 2;
-
-    yes_btn.rect.x = bx;
-    yes_btn.rect.y = by;
-    yes_btn.hovered = ui_button_hit_test(&yes_btn, mx, my);
-    ui_button_draw(g_ui.renderer, &yes_btn);
-
-    no_btn.rect.x = bx + yes_btn.rect.w + 14;
-    no_btn.rect.y = by;
-    no_btn.hovered = ui_button_hit_test(&no_btn, mx, my);
-    ui_button_draw(g_ui.renderer, &no_btn);
-
-    cancel_btn.rect.x = bx + yes_btn.rect.w + 14 + no_btn.rect.w + 14;
-    cancel_btn.rect.y = by;
-    cancel_btn.hovered = ui_button_hit_test(&cancel_btn, mx, my);
-    ui_button_draw(g_ui.renderer, &cancel_btn);
+    layout.yes_button.hovered = ui_button_hit_test(&layout.yes_button, mx, my);
+    layout.no_button.hovered = ui_button_hit_test(&layout.no_button, mx, my);
+    layout.cancel_button.hovered = ui_button_hit_test(&layout.cancel_button, mx, my);
+    ui_button_draw(g_ui.renderer, &layout.yes_button);
+    ui_button_draw(g_ui.renderer, &layout.no_button);
+    ui_button_draw(g_ui.renderer, &layout.cancel_button);
 
     draw_footer_bar();
 }
@@ -1007,7 +1229,7 @@ static void handle_events(void) {
                 continue;
             }
 
-            if (g_ui.view == VIEW_PLATFORM_SELECT) {
+            if (g_ui.view == VIEW_PLATFORM_SELECT || g_ui.view == VIEW_UNINSTALL_SELECT) {
                 int start_y = HEADER_HEIGHT + 10;
                 int search_y = start_y + TAB_HEIGHT + 10;
                 int list_y = search_y + BUTTON_HEIGHT + 10 + 22 + 6;
@@ -1096,7 +1318,12 @@ static void handle_events(void) {
                     }
                 } else if (key == SDLK_RETURN) {
                     save_selected_platforms_config();
-                    if (get_selected_count() > 1) {
+                    if (g_ui.view == VIEW_UNINSTALL_SELECT) {
+                        g_ui.view = VIEW_TASK_RUNNING;
+                        g_ui.modal_task = TASK_UNINSTALL;
+                        task_start_async(TASK_UNINSTALL, NULL);
+                        audio_play_sound(SOUND_SELECT);
+                    } else if (get_selected_count() > 1) {
                         g_ui.view = VIEW_PARALLEL_PROMPT;
                         audio_play_sound(SOUND_SELECT);
                     } else {
@@ -1155,7 +1382,7 @@ static void handle_events(void) {
                     TaskType task = g_menu_options[g_ui.selected_menu_index].task;
 
                     if (task == TASK_NONE || task == TASK_UNINSTALL) {
-                        g_ui.view = VIEW_PLATFORM_SELECT;
+                        g_ui.view = (task == TASK_UNINSTALL) ? VIEW_UNINSTALL_SELECT : VIEW_PLATFORM_SELECT;
                         ui_update_filtered_platforms();
                     } else if (task == TASK_STATUS) {
                         g_ui.view = VIEW_STATUS;
@@ -1171,7 +1398,7 @@ static void handle_events(void) {
                 }
             }
         } else if (e.type == SDL_TEXTINPUT) {
-            if (g_ui.view == VIEW_PLATFORM_SELECT && g_ui.search_active) {
+            if ((g_ui.view == VIEW_PLATFORM_SELECT || g_ui.view == VIEW_UNINSTALL_SELECT) && g_ui.search_active) {
                 if (g_ui.search_len + (int)strlen(e.text.text) < (int)sizeof(g_ui.search_filter) - 1) {
                     strcat(g_ui.search_filter, e.text.text);
                     g_ui.search_len = (int)strlen(g_ui.search_filter);
@@ -1266,7 +1493,7 @@ static void handle_events(void) {
 
                         TaskType task = g_menu_options[i].task;
                         if (task == TASK_NONE || task == TASK_UNINSTALL) {
-                            g_ui.view = VIEW_PLATFORM_SELECT;
+                            g_ui.view = (task == TASK_UNINSTALL) ? VIEW_UNINSTALL_SELECT : VIEW_PLATFORM_SELECT;
                             ui_update_filtered_platforms();
                         } else if (task == TASK_STATUS) {
                             g_ui.view = VIEW_STATUS;
@@ -1290,58 +1517,25 @@ static void handle_events(void) {
                     }
                 }
             } else if (g_ui.view == VIEW_PARALLEL_PROMPT) {
-                int modal_w = 660;
-                int modal_h = 320;
-                int modal_x = (g_ui.window_width - modal_w) / 2;
-                int modal_y = (g_ui.window_height - modal_h) / 2;
-                int by = modal_y + modal_h - 60;
-
-                UIButton yes_btn, no_btn, cancel_btn;
-                memset(&yes_btn, 0, sizeof(yes_btn));
-                yes_btn.shortcut = "[Y]";
-                yes_btn.label = "YES (PARALLEL)";
-                yes_btn.scale = FONT_SCALE_BODY;
-                ui_button_measure(&yes_btn, 170, 42);
-
-                memset(&no_btn, 0, sizeof(no_btn));
-                no_btn.shortcut = "[N]";
-                no_btn.label = "NO (SEQUENTIAL)";
-                no_btn.scale = FONT_SCALE_BODY;
-                ui_button_measure(&no_btn, 180, 42);
-
-                memset(&cancel_btn, 0, sizeof(cancel_btn));
-                cancel_btn.shortcut = "[ESC]";
-                cancel_btn.label = "CANCEL";
-                cancel_btn.scale = FONT_SCALE_BODY;
-                ui_button_measure(&cancel_btn, 120, 42);
-
-                int total_w = yes_btn.rect.w + 14 + no_btn.rect.w + 14 + cancel_btn.rect.w;
-                int bx = modal_x + (modal_w - total_w) / 2;
-
-                yes_btn.rect.x = bx;
-                yes_btn.rect.y = by;
-                no_btn.rect.x = bx + yes_btn.rect.w + 14;
-                no_btn.rect.y = by;
-                cancel_btn.rect.x = bx + yes_btn.rect.w + 14 + no_btn.rect.w + 14;
-                cancel_btn.rect.y = by;
-
-                if (ui_button_hit_test(&yes_btn, mx, my)) {
+                ParallelPromptLayout layout;
+                calculate_parallel_prompt_layout(&layout);
+                if (ui_button_hit_test(&layout.yes_button, mx, my)) {
                     g_config.use_parallel_downloads = true;
                     g_ui.view = VIEW_TASK_RUNNING;
                     g_ui.modal_task = TASK_INSTALL;
                     task_start_async(TASK_INSTALL, NULL);
                     audio_play_sound(SOUND_FANFARE);
-                } else if (ui_button_hit_test(&no_btn, mx, my)) {
+                } else if (ui_button_hit_test(&layout.no_button, mx, my)) {
                     g_config.use_parallel_downloads = false;
                     g_ui.view = VIEW_TASK_RUNNING;
                     g_ui.modal_task = TASK_INSTALL;
                     task_start_async(TASK_INSTALL, NULL);
                     audio_play_sound(SOUND_SELECT);
-                } else if (ui_button_hit_test(&cancel_btn, mx, my)) {
+                } else if (ui_button_hit_test(&layout.cancel_button, mx, my)) {
                     g_ui.view = VIEW_PLATFORM_SELECT;
                     audio_play_sound(SOUND_BACK);
                 }
-            } else if (g_ui.view == VIEW_PLATFORM_SELECT) {
+            } else if (g_ui.view == VIEW_PLATFORM_SELECT || g_ui.view == VIEW_UNINSTALL_SELECT) {
                 int start_y = HEADER_HEIGHT + 10;
                 int tab_x = MARGIN_CONTAINER;
                 int tab_h = TAB_HEIGHT;
@@ -1409,7 +1603,12 @@ static void handle_events(void) {
                             audio_play_sound(SOUND_TOGGLE);
                         } else if (a == 3) {
                             save_selected_platforms_config();
-                            if (get_selected_count() > 1) {
+                            if (g_ui.view == VIEW_UNINSTALL_SELECT) {
+                                g_ui.view = VIEW_TASK_RUNNING;
+                                g_ui.modal_task = TASK_UNINSTALL;
+                                task_start_async(TASK_UNINSTALL, NULL);
+                                audio_play_sound(SOUND_SELECT);
+                            } else if (get_selected_count() > 1) {
                                 g_ui.view = VIEW_PARALLEL_PROMPT;
                                 audio_play_sound(SOUND_SELECT);
                             } else {
@@ -1515,6 +1714,7 @@ void ui_run_main_loop(void) {
                 draw_main_menu();
                 break;
             case VIEW_PLATFORM_SELECT:
+            case VIEW_UNINSTALL_SELECT:
                 draw_platform_selector();
                 break;
             case VIEW_STATUS:

@@ -2,6 +2,7 @@
 #define TASKS_H
 
 #include "config.h"
+#include "download.h"
 #include <stdbool.h>
 
 typedef enum {
@@ -30,6 +31,8 @@ bool task_is_finished(void);
 int task_get_exit_code(void);
 float task_get_progress(void);
 const char* task_get_status_message(void);
+void task_get_work_counts(int* completed, int* total);
+void task_get_download_snapshot(DownloadManagerSnapshot* snapshot);
 
 // Synchronous task execution (for CLI mode)
 int task_run_sync(TaskType task);
