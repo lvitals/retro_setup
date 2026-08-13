@@ -91,7 +91,7 @@ echo "------------------------------------------"
 echo "Checking expected BIOS files"
 
 if ! check_selected_bios "$RA_SYSTEM_DIR"; then
-    echo "Some expected BIOS files were not found. Adjust BIOS_URLS_* in $RETRO_URL_CONFIG or copy the files to $SET_BIOS_DIR."
+    echo "Some expected BIOS files were not found. Adjust bios_url in the platform section of $RETRO_URL_CONFIG or copy the files to $SET_BIOS_DIR."
 else
     echo "Expected BIOS files found for selected platforms."
 fi

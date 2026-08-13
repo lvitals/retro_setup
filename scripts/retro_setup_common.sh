@@ -49,8 +49,63 @@ SELECTED_PLATFORMS=()
 
 load_url_config() {
     create_rom_sources_file
-    # shellcheck source=/dev/null
-    . "$RETRO_URL_CONFIG"
+    if ! grep -Eq '^[[:space:]]*\[[[:alnum:]_]+\][[:space:]]*$' "$RETRO_URL_CONFIG"; then
+        # Backward compatibility with configurations created before the INI format.
+        # shellcheck source=/dev/null
+        . "$RETRO_URL_CONFIG"
+        return
+    fi
+
+    local id
+    for id in "${PLATFORM_IDS[@]}"; do
+        unset "BIOS_URLS_$id" "ROM_URLS_$id" "ROM_DIR_URLS_$id" "ARCHIVE_COMPRESS_URLS_$id"
+    done
+
+    local section="" line key value variable
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [ -z "$line" ] && continue
+        [[ "$line" == \#* ]] && continue
+        if [[ "$line" =~ ^\[([[:alnum:]_]+)\]$ ]]; then
+            section="${BASH_REMATCH[1]}"
+            continue
+        fi
+        [[ "$line" == *=* ]] || continue
+        key="${line%%=*}"
+        value="${line#*=}"
+        key="${key%"${key##*[![:space:]]}"}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        if [[ "$value" == \"*\" && "$value" == *\" ]] || [[ "$value" == \'*\' && "$value" == *\' ]]; then
+            value="${value:1:${#value}-2}"
+        fi
+        [ -n "$value" ] || continue
+
+        if [ "$section" = global ]; then
+            case "$key" in
+                core_info_url) variable=CORE_INFO_URL ;;
+                libretro_core_base_url) variable=LIBRETRO_CORE_BASE_URL ;;
+                database_rdb_url) variable=DATABASE_RDB_URL ;;
+                database_cursors_url) variable=DATABASE_CURSORS_URL ;;
+                thumbnails_base_url) variable=THUMBNAILS_BASE_URL ;;
+                *) continue ;;
+            esac
+            printf -v "$variable" '%s' "$value"
+            continue
+        fi
+
+        case "$key" in
+            bios_url) variable="BIOS_URLS_$section" ;;
+            rom_url) variable="ROM_URLS_$section" ;;
+            rom_directory_url) variable="ROM_DIR_URLS_$section" ;;
+            archive_item) variable="ARCHIVE_COMPRESS_URLS_$section" ;;
+            *) continue ;;
+        esac
+        local -n url_values="$variable"
+        url_values+=("$value")
+        unset -n url_values
+    done < "$RETRO_URL_CONFIG"
 }
 
 detect_libretro_arch() {
@@ -209,16 +264,19 @@ create_rom_sources_file() {
         echo "# Central retro_setup URLs."
         echo "# The installer reads this file automatically."
         echo
-        echo 'CORE_INFO_URL="https://buildbot.libretro.com/assets/frontend/bundle/retroarch-core-info.zip"'
-        echo 'DATABASE_RDB_URL="https://buildbot.libretro.com/assets/frontend/database-rdb.zip"'
-        echo 'DATABASE_CURSORS_URL="https://buildbot.libretro.com/assets/frontend/database-cursors.zip"'
-        echo 'THUMBNAILS_BASE_URL="https://thumbnails.libretro.com"'
+        echo '[global]'
+        echo 'core_info_url = https://buildbot.libretro.com/assets/frontend/info.zip'
+        echo 'database_rdb_url = https://buildbot.libretro.com/assets/frontend/database-rdb.zip'
+        echo 'database_cursors_url = https://buildbot.libretro.com/assets/frontend/database-cursors.zip'
+        echo 'thumbnails_base_url = https://thumbnails.libretro.com'
         echo
         local id
         for id in "${PLATFORM_IDS[@]}"; do
             echo "# ${PLATFORM_NAME[$id]}"
-            echo "# ROM_URLS_$id=()"
-            echo "# ROM_DIR_URLS_$id=()"
+            echo "[$id]"
+            echo '# bios_url = https://example.com/bios.zip'
+            echo '# rom_url = https://example.com/rom-pack.zip'
+            echo '# rom_directory_url = https://example.com/archive-directory/'
             echo
         done
     } > "$RETRO_URL_CONFIG"
@@ -574,4 +632,3 @@ interactive_uninstall_platforms() {
 
     uninstall_platforms "${to_uninstall[@]}"
 }
-

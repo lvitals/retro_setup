@@ -156,7 +156,7 @@ for platform in "${SELECTED_PLATFORMS[@]}"; do
 
     if [ "$found_source" = false ]; then
         echo "No source configured for $platform."
-        echo "Edit $RETRO_URL_CONFIG and add ROM_URLS_$platform=(\"https://...\")"
+        echo "Edit $RETRO_URL_CONFIG, open [$platform], and add: rom_url = https://..."
     fi
 done
 

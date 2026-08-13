@@ -56,6 +56,25 @@ STEAM_RA_DIR=/path/to/Steam/steamapps/common/RetroArch ./retro_setup_steam.sh --
 - Selected platforms (Standalone): `~/.config/retro_setup/retro_setup.conf`
 - Selected platforms (Steam): `~/.config/retro_setup/retro_setup_steam.conf`
 - RetroArch, core, BIOS, ROM, and thumbnail URLs: `<repo>/retro_url.config`
+
+`retro_url.config` uses the same section-based organization as `platforms.config`.
+Global assets belong in `[global]`; platform sources belong in sections such as
+`[nes]`. Repeat a key when a platform has more than one source:
+
+```ini
+[nes]
+rom_url = https://example.com/GoodNES.zip
+
+[ps1]
+bios_url = https://example.com/scph5501.bin
+rom_directory_url = https://example.com/playstation-library/
+rom_directory_url = https://example.com/playstation-language-pack/
+```
+
+Supported platform keys are `bios_url`, `rom_url`, `rom_directory_url`, and
+`archive_item`. URLs are consumed exactly as written, so an already encoded URL
+containing `%20` must not be encoded a second time. The GUI and both Shell
+installers also continue to accept the previous Bash-style file format.
 - Local BIOS files: `<repo>/bios`
 - Downloaded ROMs: `<repo>/roms`
 - Main script (Standalone): `<repo>/retro_setup.sh`

@@ -3,10 +3,35 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #define MAX_ENTRIES 128
 static UrlArrayEntry g_entries[MAX_ENTRIES];
 static int g_entry_count = 0;
+
+static char* trim(char* text) {
+    while (*text && isspace((unsigned char)*text)) text++;
+    char* end = text + strlen(text);
+    while (end > text && isspace((unsigned char)end[-1])) *--end = 0;
+    return text;
+}
+
+static void ini_key(const char* section, const char* name, char* out, size_t out_size) {
+    if (strcmp(section, "global") == 0) {
+        if (strcmp(name, "core_info_url") == 0) snprintf(out, out_size, "CORE_INFO_URL");
+        else if (strcmp(name, "libretro_core_base_url") == 0) snprintf(out, out_size, "LIBRETRO_CORE_BASE_URL");
+        else if (strcmp(name, "database_rdb_url") == 0) snprintf(out, out_size, "DATABASE_RDB_URL");
+        else if (strcmp(name, "database_cursors_url") == 0) snprintf(out, out_size, "DATABASE_CURSORS_URL");
+        else if (strcmp(name, "thumbnails_base_url") == 0) snprintf(out, out_size, "THUMBNAILS_BASE_URL");
+        else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "bios_url") == 0) snprintf(out, out_size, "BIOS_URLS_%s", section);
+    else if (strcmp(name, "rom_url") == 0) snprintf(out, out_size, "ROM_URLS_%s", section);
+    else if (strcmp(name, "rom_directory_url") == 0) snprintf(out, out_size, "ROM_DIR_URLS_%s", section);
+    else if (strcmp(name, "archive_item") == 0) snprintf(out, out_size, "ARCHIVE_COMPRESS_URLS_%s", section);
+    else out[0] = 0;
+}
 
 static void extract_urls_for_key(const char* key, const char* str) {
     if (!key || !*key || !str || !*str) return;
@@ -70,6 +95,7 @@ bool url_config_load(const char* filepath) {
 
     char line[4096];
     char current_key[128] = {0};
+    char current_section[128] = {0};
     bool in_array = false;
 
     while (fgets(line, sizeof(line), f)) {
@@ -77,6 +103,15 @@ bool url_config_load(const char* filepath) {
         while (*p == ' ' || *p == '\t') p++;
 
         if (*p == '#' || *p == '\n' || *p == '\r' || *p == 0) continue;
+
+        if (*p == '[') {
+            char* close = strchr(p + 1, ']');
+            if (close) {
+                *close = 0;
+                snprintf(current_section, sizeof(current_section), "%s", trim(p + 1));
+            }
+            continue;
+        }
 
         if (in_array) {
             extract_urls_for_key(current_key, p);
@@ -98,7 +133,23 @@ bool url_config_load(const char* filepath) {
             while (klen > 0 && (key[klen - 1] == ' ' || key[klen - 1] == '\t')) key[--klen] = 0;
 
             char* val = eq + 1;
-            while (*val == ' ' || *val == '\t') val++;
+            val = trim(val);
+
+            if (current_section[0]) {
+                char mapped_key[128];
+                char* comment = strchr(val, '#');
+                if (comment && (comment == val || isspace((unsigned char)comment[-1]))) *comment = 0;
+                val = trim(val);
+                size_t vlen = strlen(val);
+                if (vlen >= 2 && ((val[0] == '"' && val[vlen - 1] == '"') ||
+                                  (val[0] == '\'' && val[vlen - 1] == '\''))) {
+                    val[vlen - 1] = 0;
+                    val++;
+                }
+                ini_key(current_section, key, mapped_key, sizeof(mapped_key));
+                if (mapped_key[0] && val[0]) extract_urls_for_key(mapped_key, val);
+                continue;
+            }
 
             if (*val == '(') {
                 // Bash array syntax: key=( ... )
