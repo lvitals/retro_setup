@@ -109,17 +109,27 @@ static int manager_claim(const char* url, const char* destination, DownloadResul
         manager_unlock();
         return 0;
     }
-    if (g_downloads.count >= MAX_DOWNLOAD_TASKS) { manager_unlock(); return -1; }
-    DownloadTask* t = &g_downloads.tasks[g_downloads.count];
+    int slot = g_downloads.count;
+    if (slot >= MAX_DOWNLOAD_TASKS) {
+        /* Long sequential jobs such as thumbnail collections may contain
+           thousands of files. Recycle an inactive display slot instead of
+           treating the UI history limit as a download limit. */
+        slot = -1;
+        for (int i = 0; i < g_downloads.count; ++i) {
+            if (state_is_terminal(g_downloads.tasks[i].state)) { slot = i; break; }
+        }
+        if (slot < 0) { manager_unlock(); return -1; }
+    }
+    DownloadTask* t = &g_downloads.tasks[slot];
     memset(t, 0, sizeof(*t));
-    t->id = g_downloads.count + 1;
+    t->id = slot + 1;
     snprintf(t->url, sizeof(t->url), "%s", url);
     snprintf(t->destination, sizeof(t->destination), "%s", destination);
     snprintf(t->partial_path, sizeof(t->partial_path), "%s.part", destination);
     fs_get_filename(t->filename, sizeof(t->filename), destination);
     t->remote_size = -1;
     t->state = DOWNLOAD_QUEUED;
-    ++g_downloads.count;
+    if (slot == g_downloads.count) ++g_downloads.count;
     int id = t->id;
     manager_unlock();
     return id;

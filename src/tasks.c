@@ -653,32 +653,166 @@ static int do_task_uninstall(void) {
     return 0;
 }
 
-static int do_task_thumbnails(void) {
-    log_add(LOG_LEVEL_INFO, "=== Starting Thumbnail Download ===");
-    snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Checking playlists for thumbnails...");
+typedef struct {
+    char* data;
+    size_t size;
+} ThumbnailIndex;
 
-    int processed = 0;
-    int selected_cnt = get_selected_count();
-    if (selected_cnt == 0) selected_cnt = 1;
+static size_t thumbnail_index_write(void* contents, size_t size, size_t nmemb, void* user_data) {
+    ThumbnailIndex* index = user_data;
+    size_t bytes = size * nmemb;
+    char* resized = realloc(index->data, index->size + bytes + 1);
+    if (!resized) return 0;
+    index->data = resized;
+    memcpy(index->data + index->size, contents, bytes);
+    index->size += bytes;
+    index->data[index->size] = 0;
+    return bytes;
+}
 
-    for (int i = 0; i < TOTAL_PLATFORMS; i++) {
-        if (g_task_mgr.cancel_requested) break;
-        if (!g_platforms[i].selected) continue;
+static int thumbnail_index_progress(void* user_data, curl_off_t dltotal, curl_off_t dlnow,
+                                    curl_off_t ultotal, curl_off_t ulnow) {
+    (void)user_data; (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
+    if (g_task_mgr.cancel_requested) return 1;
+    while (g_task_mgr.pause_requested && !g_task_mgr.cancel_requested) SDL_Delay(50);
+    return g_task_mgr.cancel_requested ? 1 : 0;
+}
 
-        PlatformInfo* p = &g_platforms[i];
-        processed++;
-        g_task_mgr.progress = (float)processed / (float)selected_cnt;
+static bool fetch_thumbnail_index(const char* url, ThumbnailIndex* index) {
+    memset(index, 0, sizeof(*index));
+    CURL* curl = curl_easy_init();
+    if (!curl) return false;
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, thumbnail_index_write);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, index);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, thumbnail_index_progress);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 128L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "RetroSetupGUI/3.0");
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+    CURLcode result = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_cleanup(curl);
+    if (result == CURLE_OK && status >= 200 && status < 300) return true;
+    free(index->data);
+    memset(index, 0, sizeof(*index));
+    return false;
+}
 
-        log_add(LOG_LEVEL_INFO, "Checking thumbnails for %s (%d/%d)...", p->name, processed, selected_cnt);
-        char thumb_dir[MAX_PATH_LEN];
-        snprintf(thumb_dir, sizeof(thumb_dir), "%.1000s/thumbnails/%.500s/Named_Boxarts", g_config.ra_dir, p->name);
-        fs_mkdir_p(thumb_dir);
+static int download_thumbnail_collection(const char* base_url, const PlatformInfo* platform,
+                                         const char* type, int* downloaded, int* skipped,
+                                         int* failed) {
+    CURL* encoder = curl_easy_init();
+    if (!encoder) return 1;
+    char* system_encoded = curl_easy_escape(encoder, platform->name, 0);
+    if (!system_encoded) { curl_easy_cleanup(encoder); return 1; }
+
+    char collection_url[4096];
+    snprintf(collection_url, sizeof(collection_url), "%s/%s/%s/", base_url, system_encoded, type);
+    curl_free(system_encoded);
+
+    log_add(LOG_LEVEL_INFO, "[THUMBNAILS] Reading %s / %s", platform->name, type);
+    ThumbnailIndex index;
+    if (!fetch_thumbnail_index(collection_url, &index)) {
+        curl_easy_cleanup(encoder);
+        if (!g_task_mgr.cancel_requested)
+            log_add(LOG_LEVEL_ERROR, "Could not read thumbnail collection: %s", collection_url);
+        return 1;
     }
 
+    char destination_dir[MAX_PATH_LEN];
+    snprintf(destination_dir, sizeof(destination_dir), "%.1000s/thumbnails/%.500s/%s",
+             g_config.ra_dir, platform->name, type);
+    fs_mkdir_p(destination_dir);
+
+    const char* cursor = index.data;
+    while (!g_task_mgr.cancel_requested && (cursor = strstr(cursor, "href=\"")) != NULL) {
+        cursor += 6;
+        const char* end = strchr(cursor, '"');
+        if (!end) break;
+        size_t href_length = (size_t)(end - cursor);
+        cursor = end + 1;
+        if (href_length < 5 || href_length >= 2048 || strncmp(end - 4, ".png", 4) != 0) continue;
+
+        char href[2048];
+        memcpy(href, end - href_length, href_length);
+        href[href_length] = 0;
+        int decoded_length = 0;
+        char* filename = curl_easy_unescape(encoder, href, (int)href_length, &decoded_length);
+        if (!filename || decoded_length <= 0 || strchr(filename, '/') || strchr(filename, '\\')) {
+            if (filename) curl_free(filename);
+            continue;
+        }
+
+        char source[6144], destination[MAX_PATH_LEN];
+        snprintf(source, sizeof(source), "%s%s", collection_url, href);
+        fs_join_path(destination, sizeof(destination), destination_dir, filename);
+        curl_free(filename);
+
+        bool existed = fs_is_file(destination) && fs_file_size(destination) > 0;
+        DownloadResult result;
+        if (download_file(source, destination, download_progress_cb, NULL,
+                          &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &result)) {
+            if (existed || result.state == DOWNLOAD_SKIPPED) (*skipped)++;
+            else (*downloaded)++;
+        } else if (!g_task_mgr.cancel_requested) {
+            (*failed)++;
+        }
+    }
+
+    free(index.data);
+    curl_easy_cleanup(encoder);
+    return g_task_mgr.cancel_requested ? -1 : 0;
+}
+
+static int do_task_thumbnails(void) {
+    log_add(LOG_LEVEL_INFO, "=== Starting Native Thumbnail Download (libcurl) ===");
+    snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Downloading thumbnail collections...");
+    int selected_count = get_selected_count();
+    if (selected_count == 0) {
+        log_add(LOG_LEVEL_ERROR, "No platforms selected for thumbnail download.");
+        return 1;
+    }
+
+    url_config_load(g_config.url_config_file);
+    const char* configured_base = url_config_get_string("THUMBNAILS_BASE_URL", "https://thumbnails.libretro.com");
+    char base_url[2048];
+    snprintf(base_url, sizeof(base_url), "%s", configured_base);
+    size_t base_length = strlen(base_url);
+    while (base_length > 0 && base_url[base_length - 1] == '/') base_url[--base_length] = 0;
+
+    const char* types[] = {"Named_Boxarts", "Named_Snaps", "Named_Titles"};
+    int downloaded = 0, skipped = 0, failed = 0, processed = 0;
+    SDL_AtomicSet(&g_task_mgr.work_total, selected_count * 3);
+    for (int i = 0; i < TOTAL_PLATFORMS && !g_task_mgr.cancel_requested; ++i) {
+        if (!g_platforms[i].selected) continue;
+        for (int type = 0; type < 3 && !g_task_mgr.cancel_requested; ++type) {
+            snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message),
+                     "%s: %s", g_platforms[i].name, types[type]);
+            int result = download_thumbnail_collection(base_url, &g_platforms[i], types[type],
+                                                       &downloaded, &skipped, &failed);
+            processed++;
+            SDL_AtomicSet(&g_task_mgr.work_completed, processed);
+            g_task_mgr.progress = (float)processed / (float)(selected_count * 3);
+            if (result > 0) failed++;
+        }
+    }
+
+    if (g_task_mgr.cancel_requested) {
+        log_add(LOG_LEVEL_WARN, "=== Thumbnail Download Cancelled (%d new, %d existing) ===", downloaded, skipped);
+        return -1;
+    }
+    log_add(failed ? LOG_LEVEL_WARN : LOG_LEVEL_INFO,
+            "=== Thumbnails Completed: %d downloaded, %d existing, %d failed ===",
+            downloaded, skipped, failed);
+    snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message),
+             "Thumbnails: %d downloaded, %d existing, %d failed.", downloaded, skipped, failed);
     g_task_mgr.progress = 1.0f;
-    snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Thumbnails sync completed!");
-    log_add(LOG_LEVEL_INFO, "=== Thumbnails Completed ===");
-    return 0;
+    return failed ? 1 : 0;
 }
 
 static int do_task_implode(void) {
