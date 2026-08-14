@@ -653,105 +653,139 @@ static int do_task_uninstall(void) {
     return 0;
 }
 
-typedef struct {
-    char* data;
-    size_t size;
-} ThumbnailIndex;
+typedef struct { char** items; int count; } ThumbnailLabels;
 
-static size_t thumbnail_index_write(void* contents, size_t size, size_t nmemb, void* user_data) {
-    ThumbnailIndex* index = user_data;
-    size_t bytes = size * nmemb;
-    char* resized = realloc(index->data, index->size + bytes + 1);
-    if (!resized) return 0;
-    index->data = resized;
-    memcpy(index->data + index->size, contents, bytes);
-    index->size += bytes;
-    index->data[index->size] = 0;
-    return bytes;
+static void free_thumbnail_labels(ThumbnailLabels* labels) {
+    for (int i = 0; i < labels->count; ++i) free(labels->items[i]);
+    free(labels->items);
+    memset(labels, 0, sizeof(*labels));
 }
 
-static int thumbnail_index_progress(void* user_data, curl_off_t dltotal, curl_off_t dlnow,
-                                    curl_off_t ultotal, curl_off_t ulnow) {
-    (void)user_data; (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
-    if (g_task_mgr.cancel_requested) return 1;
-    while (g_task_mgr.pause_requested && !g_task_mgr.cancel_requested) SDL_Delay(50);
-    return g_task_mgr.cancel_requested ? 1 : 0;
+static bool load_thumbnail_labels(const PlatformInfo* platform, ThumbnailLabels* labels) {
+    memset(labels, 0, sizeof(*labels));
+    char rom_dir[MAX_PATH_LEN];
+    fs_join_path(rom_dir, sizeof(rom_dir), g_config.rom_dir, platform->id);
+    if (!fs_is_dir(rom_dir)) {
+        log_add(LOG_LEVEL_WARN, "ROM directory not found for %s: %s", platform->name, rom_dir);
+        return false;
+    }
+    char playlist[MAX_PATH_LEN];
+    snprintf(playlist, sizeof(playlist), "%.1000s/playlists/%.500s.lpl", g_config.ra_dir, platform->name);
+    FILE* file = fopen(playlist, "r");
+    if (!file) {
+        log_add(LOG_LEVEL_WARN, "No ROM playlist found for %s: %s", platform->name, playlist);
+        return false;
+    }
+
+    char line[4096];
+    while (fgets(line, sizeof(line), file)) {
+        char* key = strstr(line, "\"label\"");
+        if (!key || !(key = strchr(key, ':'))) continue;
+        char* begin = strchr(key, '"');
+        if (!begin) continue;
+        begin++;
+        char decoded[2048];
+        size_t n = 0;
+        for (char* p = begin; *p && n + 1 < sizeof(decoded); ++p) {
+            if (*p == '"') break;
+            if (*p == '\\' && p[1]) {
+                ++p;
+                if (*p == 'n') decoded[n++] = '\n';
+                else decoded[n++] = *p;
+            } else decoded[n++] = *p;
+        }
+        decoded[n] = 0;
+        if (!decoded[0]) continue;
+        char** grown = realloc(labels->items, (size_t)(labels->count + 1) * sizeof(*labels->items));
+        if (!grown) { fclose(file); free_thumbnail_labels(labels); return false; }
+        labels->items = grown;
+        labels->items[labels->count] = malloc(n + 1);
+        if (!labels->items[labels->count]) { fclose(file); free_thumbnail_labels(labels); return false; }
+        memcpy(labels->items[labels->count++], decoded, n + 1);
+    }
+    fclose(file);
+    return labels->count > 0;
 }
 
-static bool fetch_thumbnail_index(const char* url, ThumbnailIndex* index) {
-    memset(index, 0, sizeof(*index));
-    CURL* curl = curl_easy_init();
-    if (!curl) return false;
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, thumbnail_index_write);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, index);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, thumbnail_index_progress);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 128L);
-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "RetroSetupGUI/3.0");
-    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
-    CURLcode result = curl_easy_perform(curl);
-    long status = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-    curl_easy_cleanup(curl);
-    if (result == CURLE_OK && status >= 200 && status < 300) return true;
-    free(index->data);
-    memset(index, 0, sizeof(*index));
-    return false;
+static void thumbnail_filename(char* out, size_t out_size, const char* label) {
+    snprintf(out, out_size, "%s", label);
+    for (char* p = out; *p; ++p)
+        if (strchr("&*/:`<>?|\\", *p)) *p = '_';
+}
+
+static void normalize_goodtools_label(char* out, size_t out_size, const char* label) {
+    struct RegionMap { const char* code; const char* name; };
+    static const struct RegionMap regions[] = {
+        {"(U)", "(USA)"}, {"(E)", "(Europe)"}, {"(J)", "(Japan)"},
+        {"(W)", "(World)"}, {"(F)", "(France)"}, {"(G)", "(Germany)"},
+        {"(I)", "(Italy)"}, {"(S)", "(Spain)"}, {"(K)", "(Korea)"},
+        {"(C)", "(China)"}, {"(A)", "(Australia)"}, {"(B)", "(Brazil)"},
+        {"(VC)", "(Virtual Console)"}
+    };
+    size_t used = 0;
+    for (const char* p = label; *p && used + 1 < out_size;) {
+        if (*p == '[') {
+            const char* end = strchr(p, ']');
+            if (end) { p = end + 1; continue; }
+        }
+        bool replaced = false;
+        for (size_t i = 0; i < sizeof(regions) / sizeof(regions[0]); ++i) {
+            size_t code_len = strlen(regions[i].code);
+            if (strncmp(p, regions[i].code, code_len) == 0) {
+                size_t name_len = strlen(regions[i].name);
+                if (used + name_len < out_size) {
+                    memcpy(out + used, regions[i].name, name_len);
+                    used += name_len;
+                }
+                p += code_len;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) out[used++] = *p++;
+    }
+    out[used] = 0;
+    /* Removing dump-status tags may leave duplicate or trailing spaces. */
+    char* src = out;
+    char* dst = out;
+    bool previous_space = false;
+    while (*src) {
+        bool space = *src == ' ' || *src == '\t';
+        if (!space || !previous_space) *dst++ = space ? ' ' : *src;
+        previous_space = space;
+        src++;
+    }
+    while (dst > out && dst[-1] == ' ') --dst;
+    *dst = 0;
 }
 
 static int download_thumbnail_collection(const char* base_url, const PlatformInfo* platform,
-                                         const char* type, int* downloaded, int* skipped,
-                                         int* failed) {
+                                         const char* type, const ThumbnailLabels* labels,
+                                         int* downloaded, int* skipped, int* missing, int* failed) {
     CURL* encoder = curl_easy_init();
     if (!encoder) return 1;
     char* system_encoded = curl_easy_escape(encoder, platform->name, 0);
     if (!system_encoded) { curl_easy_cleanup(encoder); return 1; }
 
-    char collection_url[4096];
-    snprintf(collection_url, sizeof(collection_url), "%s/%s/%s/", base_url, system_encoded, type);
-    curl_free(system_encoded);
-
-    log_add(LOG_LEVEL_INFO, "[THUMBNAILS] Reading %s / %s", platform->name, type);
-    ThumbnailIndex index;
-    if (!fetch_thumbnail_index(collection_url, &index)) {
-        curl_easy_cleanup(encoder);
-        if (!g_task_mgr.cancel_requested)
-            log_add(LOG_LEVEL_ERROR, "Could not read thumbnail collection: %s", collection_url);
-        return 1;
-    }
+    log_add(LOG_LEVEL_INFO, "[THUMBNAILS] %s / %s (%d ROMs)", platform->name, type, labels->count);
 
     char destination_dir[MAX_PATH_LEN];
     snprintf(destination_dir, sizeof(destination_dir), "%.1000s/thumbnails/%.500s/%s",
              g_config.ra_dir, platform->name, type);
     fs_mkdir_p(destination_dir);
 
-    const char* cursor = index.data;
-    while (!g_task_mgr.cancel_requested && (cursor = strstr(cursor, "href=\"")) != NULL) {
-        cursor += 6;
-        const char* end = strchr(cursor, '"');
-        if (!end) break;
-        size_t href_length = (size_t)(end - cursor);
-        cursor = end + 1;
-        if (href_length < 5 || href_length >= 2048 || strncmp(end - 4, ".png", 4) != 0) continue;
-
-        char href[2048];
-        memcpy(href, end - href_length, href_length);
-        href[href_length] = 0;
-        int decoded_length = 0;
-        char* filename = curl_easy_unescape(encoder, href, (int)href_length, &decoded_length);
-        if (!filename || decoded_length <= 0 || strchr(filename, '/') || strchr(filename, '\\')) {
-            if (filename) curl_free(filename);
-            continue;
-        }
-
+    for (int i = 0; i < labels->count && !g_task_mgr.cancel_requested; ++i) {
+        char remote_label[2048], remote_name[2048], local_name[2100];
+        normalize_goodtools_label(remote_label, sizeof(remote_label), labels->items[i]);
+        thumbnail_filename(remote_name, sizeof(remote_name), remote_label);
+        thumbnail_filename(local_name, sizeof(local_name), labels->items[i]);
+        char* encoded_name = curl_easy_escape(encoder, remote_name, 0);
+        if (!encoded_name) { (*failed)++; continue; }
         char source[6144], destination[MAX_PATH_LEN];
-        snprintf(source, sizeof(source), "%s%s", collection_url, href);
-        fs_join_path(destination, sizeof(destination), destination_dir, filename);
-        curl_free(filename);
+        snprintf(source, sizeof(source), "%s/%s/%s/%s.png", base_url, system_encoded, type, encoded_name);
+        strncat(local_name, ".png", sizeof(local_name) - strlen(local_name) - 1);
+        fs_join_path(destination, sizeof(destination), destination_dir, local_name);
+        curl_free(encoded_name);
 
         bool existed = fs_is_file(destination) && fs_file_size(destination) > 0;
         DownloadResult result;
@@ -760,11 +794,14 @@ static int download_thumbnail_collection(const char* base_url, const PlatformInf
             if (existed || result.state == DOWNLOAD_SKIPPED) (*skipped)++;
             else (*downloaded)++;
         } else if (!g_task_mgr.cancel_requested) {
-            (*failed)++;
+            if (result.http_status == 404) {
+                (*missing)++;
+                log_add(LOG_LEVEL_WARN, "Image not found: %s / %s / %s", platform->name, type, labels->items[i]);
+            } else (*failed)++;
         }
     }
 
-    free(index.data);
+    curl_free(system_encoded);
     curl_easy_cleanup(encoder);
     return g_task_mgr.cancel_requested ? -1 : 0;
 }
@@ -778,6 +815,10 @@ static int do_task_thumbnails(void) {
         return 1;
     }
 
+    /* Refresh labels so deleted or newly added ROMs cannot leave thumbnail
+       downloads based on a stale playlist. */
+    playlist_generate_selected(g_config.ra_dir, g_config.rom_dir);
+
     url_config_load(g_config.url_config_file);
     const char* configured_base = url_config_get_string("THUMBNAILS_BASE_URL", "https://thumbnails.libretro.com");
     char base_url[2048];
@@ -786,20 +827,31 @@ static int do_task_thumbnails(void) {
     while (base_length > 0 && base_url[base_length - 1] == '/') base_url[--base_length] = 0;
 
     const char* types[] = {"Named_Boxarts", "Named_Snaps", "Named_Titles"};
-    int downloaded = 0, skipped = 0, failed = 0, processed = 0;
+    int downloaded = 0, skipped = 0, missing = 0, failed = 0, processed = 0;
+    int platforms_without_roms = 0;
     SDL_AtomicSet(&g_task_mgr.work_total, selected_count * 3);
     for (int i = 0; i < TOTAL_PLATFORMS && !g_task_mgr.cancel_requested; ++i) {
         if (!g_platforms[i].selected) continue;
+        ThumbnailLabels labels;
+        if (!load_thumbnail_labels(&g_platforms[i], &labels)) {
+            log_add(LOG_LEVEL_WARN, "NO ROMS FOUND: %s; no thumbnails will be downloaded.", g_platforms[i].name);
+            platforms_without_roms++;
+            processed += 3;
+            SDL_AtomicSet(&g_task_mgr.work_completed, processed);
+            g_task_mgr.progress = (float)processed / (float)(selected_count * 3);
+            continue;
+        }
         for (int type = 0; type < 3 && !g_task_mgr.cancel_requested; ++type) {
             snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message),
                      "%s: %s", g_platforms[i].name, types[type]);
-            int result = download_thumbnail_collection(base_url, &g_platforms[i], types[type],
-                                                       &downloaded, &skipped, &failed);
+            int result = download_thumbnail_collection(base_url, &g_platforms[i], types[type], &labels,
+                                                       &downloaded, &skipped, &missing, &failed);
             processed++;
             SDL_AtomicSet(&g_task_mgr.work_completed, processed);
             g_task_mgr.progress = (float)processed / (float)(selected_count * 3);
             if (result > 0) failed++;
         }
+        free_thumbnail_labels(&labels);
     }
 
     if (g_task_mgr.cancel_requested) {
@@ -807,10 +859,11 @@ static int do_task_thumbnails(void) {
         return -1;
     }
     log_add(failed ? LOG_LEVEL_WARN : LOG_LEVEL_INFO,
-            "=== Thumbnails Completed: %d downloaded, %d existing, %d failed ===",
-            downloaded, skipped, failed);
+            "=== Thumbnails Completed: %d downloaded, %d existing, %d images not found, %d systems without ROMs, %d errors ===",
+            downloaded, skipped, missing, platforms_without_roms, failed);
     snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message),
-             "Thumbnails: %d downloaded, %d existing, %d failed.", downloaded, skipped, failed);
+             "Thumbnails: %d downloaded, %d existing, %d not found, %d without ROMs, %d errors.",
+             downloaded, skipped, missing, platforms_without_roms, failed);
     g_task_mgr.progress = 1.0f;
     return failed ? 1 : 0;
 }

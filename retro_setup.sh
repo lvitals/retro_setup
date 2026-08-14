@@ -15,7 +15,7 @@ Commands:
   --select    select platforms and install everything they need
   --install   continue/re-run installation for saved platforms
   --uninstall select platforms to remove what was installed for them
-  --thumbnails download thumbnails for saved platforms
+  --thumbnails download only thumbnails matching installed ROM names
   --implode   remove local RetroArch configuration
   --status    show platforms and configuration files
   --help      show this help
@@ -57,6 +57,7 @@ case "${1:-}" in
         ;;
     --thumbnails)
         selected_platforms_or_all
+        "$SCRIPT_DIR/generate_playlists.sh"
         "$SCRIPT_DIR/download_thumbnails.sh"
         ;;
     --implode)
