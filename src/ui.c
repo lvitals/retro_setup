@@ -633,7 +633,9 @@ static void draw_task_modal(void) {
     float stage_progress = (g_ui.modal_task == TASK_INSTALL || g_ui.modal_task == TASK_UNINSTALL)
                          ? (work_total > 0 ? (float)work_done / (float)work_total : 0.0f)
                          : task_get_progress();
-    float progress = downloads.total_bytes > 0 ? byte_progress * 0.85f + stage_progress * 0.15f : stage_progress;
+    float progress = (g_ui.modal_task == TASK_THUMBNAILS || downloads.total_bytes <= 0)
+                   ? stage_progress
+                   : byte_progress * 0.85f + stage_progress * 0.15f;
     if (!task_is_finished() && progress >= 1.0f) progress = 0.99f;
     if (task_is_finished() && task_get_exit_code() == 0) progress = 1.0f;
     if (task_is_finished() && task_get_exit_code() != 0 && progress >= 1.0f) progress = 0.99f;

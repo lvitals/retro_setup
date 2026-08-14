@@ -63,44 +63,56 @@ thumbnail_name() {
     printf '%s' "$1" | sed 's#[&*/:`<>?|\\]#_#g'
 }
 
-normalize_goodtools_label() {
-    local value="$1"
-    value="$(printf '%s' "$value" | sed \
-        -e 's/\[[^]]*\]//g' \
-        -e 's/(U)/(USA)/g' -e 's/(E)/(Europe)/g' -e 's/(J)/(Japan)/g' \
-        -e 's/(W)/(World)/g' -e 's/(F)/(France)/g' -e 's/(G)/(Germany)/g' \
-        -e 's/(I)/(Italy)/g' -e 's/(S)/(Spain)/g' -e 's/(K)/(Korea)/g' \
-        -e 's/(C)/(China)/g' -e 's/(A)/(Australia)/g' -e 's/(B)/(Brazil)/g' \
-        -e 's/(VC)/(Virtual Console)/g' \
-        -e 's/[[:space:]][[:space:]]*/ /g' -e 's/[[:space:]]*$//')"
-    printf '%s' "$value"
+catalog_match() {
+    python3 -c 'import re, sys, urllib.parse
+label, path = sys.argv[1:]
+key = lambda s: "".join(c.lower() for c in s.split(" (")[0] if c.isalnum())
+wanted = key(label)
+data = open(path, encoding="utf-8", errors="ignore").read()
+for href in re.findall(r"href=\"([^\"]+\.png)\"", data, re.I):
+    name = urllib.parse.unquote(href).rsplit("/", 1)[-1][:-4]
+    if key(name) == wanted:
+        print(name)
+        break' "$1" "$2"
 }
 
 download_thumbnail() {
     local system="$1"
     local type="$2"
     local label="$3"
-    local system_encoded filename remote_filename filename_encoded url dest
+    local index_file="$4"
+    local system_encoded filename matched remote_filename filename_encoded url dest success
 
     system_encoded="$(url_encode_component "$system")"
     filename="$(thumbnail_name "$label").png"
-    remote_filename="$(thumbnail_name "$(normalize_goodtools_label "$label")").png"
-    filename_encoded="$(url_encode_component "$remote_filename")"
-    url="${BASE_URL%/}/$system_encoded/$type/$filename_encoded"
     dest="$THUMB_DIR/$system/$type/$filename"
 
     mkdir -p "$(dirname "$dest")"
     if [ -s "$dest" ]; then
         skipped=$((skipped + 1))
-    elif wget "${WGET_OPTS[@]}" --quiet --output-document="$dest.part" "$url"; then
-        mv -f "$dest.part" "$dest"
-        downloaded=$((downloaded + 1))
-        echo "Downloaded: $system / $type / $label"
     else
-        rm -f "$dest.part"
-        missing=$((missing + 1))
-        echo "IMAGE NOT FOUND: $system / $type / $label"
+        success=false
+        matched="$(catalog_match "$label" "$index_file")"
+        if [ -n "$matched" ]; then
+            remote_filename="$(thumbnail_name "$matched").png"
+            filename_encoded="$(url_encode_component "$remote_filename")"
+            url="${BASE_URL%/}/$system_encoded/$type/$filename_encoded"
+            if wget "${WGET_OPTS[@]}" --quiet --output-document="$dest.part" "$url"; then
+                mv -f "$dest.part" "$dest"
+                downloaded=$((downloaded + 1))
+                echo "Downloaded: $system / $type / $label"
+                success=true
+            fi
+            rm -f "$dest.part"
+        fi
+        if [ "$success" = false ]; then
+            missing=$((missing + 1))
+            echo "IMAGE NOT FOUND: $system / $type / $label"
+        fi
     fi
+    processed=$((processed + 1))
+    percent=$((processed * 100 / total))
+    echo "Progress: $processed/$total ($percent%)"
 }
 
 if ! command -v wget >/dev/null 2>&1; then
@@ -114,6 +126,23 @@ downloaded=0
 skipped=0
 missing=0
 platforms_without_roms=0
+processed=0
+total=0
+
+for platform in "${SELECTED_PLATFORMS[@]}"; do
+    system="${PLATFORM_NAME[$platform]}"
+    playlist="$PLAYLIST_DIR/$system.lpl"
+    if [ -f "$playlist" ]; then
+        count="$(grep -c '^[[:space:]]*"label": ' "$playlist" || true)"
+        total=$((total + count * 3))
+    fi
+done
+
+if [ "$total" -eq 0 ]; then
+    echo "NO ROMS FOUND: there are no thumbnails to download."
+    exit 0
+fi
+echo "Thumbnail range: 0/$total (0%) to $total/$total (100%)"
 
 for platform in "${SELECTED_PLATFORMS[@]}"; do
     system="${PLATFORM_NAME[$platform]}"
@@ -136,8 +165,13 @@ for platform in "${SELECTED_PLATFORMS[@]}"; do
     echo "--- Processing System: $system (${#labels[@]} ROMs) ---"
 
     for type in "${TYPES[@]}"; do
+        system_encoded="$(url_encode_component "$system")"
+        index_file="$THUMB_DIR/$system/$type/.thumbnail-index.html"
+        mkdir -p "$(dirname "$index_file")"
+        wget "${WGET_OPTS[@]}" --quiet --output-document="$index_file.part" \
+            "${BASE_URL%/}/$system_encoded/$type/" && mv -f "$index_file.part" "$index_file"
         for label in "${labels[@]}"; do
-            download_thumbnail "$system" "$type" "$label"
+            download_thumbnail "$system" "$type" "$label" "$index_file"
         done
     done
 done

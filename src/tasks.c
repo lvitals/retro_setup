@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <ctype.h>
 #include <dirent.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_thread.h>
@@ -654,6 +656,82 @@ static int do_task_uninstall(void) {
 }
 
 typedef struct { char** items; int count; } ThumbnailLabels;
+typedef struct { char** names; char** keys; int count; } ThumbnailCatalog;
+
+static size_t thumbnail_catalog_write(void* data, size_t size, size_t nmemb, void* user_data) {
+    ThumbnailLabels* buffer = user_data;
+    size_t bytes = size * nmemb;
+    char* grown = realloc(buffer->items, (size_t)buffer->count + bytes + 1);
+    if (!grown) return 0;
+    buffer->items = (char**)grown;
+    memcpy((char*)buffer->items + buffer->count, data, bytes);
+    buffer->count += (int)bytes;
+    ((char*)buffer->items)[buffer->count] = 0;
+    return bytes;
+}
+
+static void thumbnail_match_key(char* out, size_t out_size, const char* name) {
+    size_t used = 0;
+    const char* end = strstr(name, " (");
+    if (!end) end = name + strlen(name);
+    for (const char* p = name; p < end && used + 1 < out_size; p++) {
+        if (isalnum((unsigned char)*p)) out[used++] = (char)tolower((unsigned char)*p);
+    }
+    out[used] = 0;
+}
+
+static void free_thumbnail_catalog(ThumbnailCatalog* catalog) {
+    for (int i = 0; i < catalog->count; ++i) { free(catalog->names[i]); free(catalog->keys[i]); }
+    free(catalog->names); free(catalog->keys); memset(catalog, 0, sizeof(*catalog));
+}
+
+static bool load_thumbnail_catalog(const char* url, ThumbnailCatalog* catalog) {
+    memset(catalog, 0, sizeof(*catalog));
+    ThumbnailLabels html = {0};
+    CURL* curl = curl_easy_init();
+    if (!curl) return false;
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, thumbnail_catalog_write);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &html);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "RetroSetupGUI/3.0");
+    CURLcode rc = curl_easy_perform(curl);
+    if (rc != CURLE_OK) { curl_easy_cleanup(curl); free(html.items); return false; }
+    char* cursor = (char*)html.items;
+    while ((cursor = strstr(cursor, "href=\""))) {
+        cursor += 6;
+        char* end = strchr(cursor, '"');
+        if (!end) break;
+        int length = (int)(end - cursor), decoded_length = 0;
+        char* decoded = curl_easy_unescape(curl, cursor, length, &decoded_length);
+        cursor = end + 1;
+        if (!decoded || decoded_length < 5 || strcasecmp(decoded + decoded_length - 4, ".png")) {
+            if (decoded) curl_free(decoded);
+            continue;
+        }
+        decoded[decoded_length - 4] = 0;
+        char** names = realloc(catalog->names, (size_t)(catalog->count + 1) * sizeof(char*));
+        char** keys = realloc(catalog->keys, (size_t)(catalog->count + 1) * sizeof(char*));
+        if (!names || !keys) { if (names) catalog->names = names; if (keys) catalog->keys = keys; curl_free(decoded); break; }
+        catalog->names = names; catalog->keys = keys;
+        catalog->names[catalog->count] = strdup(decoded);
+        char key[1024]; thumbnail_match_key(key, sizeof(key), decoded);
+        catalog->keys[catalog->count] = strdup(key);
+        if (catalog->names[catalog->count] && catalog->keys[catalog->count]) catalog->count++;
+        curl_free(decoded);
+    }
+    curl_easy_cleanup(curl); free(html.items);
+    return catalog->count > 0;
+}
+
+static const char* catalog_match(const ThumbnailCatalog* catalog, const char* label) {
+    char key[1024]; thumbnail_match_key(key, sizeof(key), label);
+    for (int i = 0; i < catalog->count; ++i) {
+        if (!strcmp(key, catalog->keys[i])) return catalog->names[i];
+    }
+    return NULL;
+}
 
 static void free_thumbnail_labels(ThumbnailLabels* labels) {
     for (int i = 0; i < labels->count; ++i) free(labels->items[i]);
@@ -713,55 +791,10 @@ static void thumbnail_filename(char* out, size_t out_size, const char* label) {
         if (strchr("&*/:`<>?|\\", *p)) *p = '_';
 }
 
-static void normalize_goodtools_label(char* out, size_t out_size, const char* label) {
-    struct RegionMap { const char* code; const char* name; };
-    static const struct RegionMap regions[] = {
-        {"(U)", "(USA)"}, {"(E)", "(Europe)"}, {"(J)", "(Japan)"},
-        {"(W)", "(World)"}, {"(F)", "(France)"}, {"(G)", "(Germany)"},
-        {"(I)", "(Italy)"}, {"(S)", "(Spain)"}, {"(K)", "(Korea)"},
-        {"(C)", "(China)"}, {"(A)", "(Australia)"}, {"(B)", "(Brazil)"},
-        {"(VC)", "(Virtual Console)"}
-    };
-    size_t used = 0;
-    for (const char* p = label; *p && used + 1 < out_size;) {
-        if (*p == '[') {
-            const char* end = strchr(p, ']');
-            if (end) { p = end + 1; continue; }
-        }
-        bool replaced = false;
-        for (size_t i = 0; i < sizeof(regions) / sizeof(regions[0]); ++i) {
-            size_t code_len = strlen(regions[i].code);
-            if (strncmp(p, regions[i].code, code_len) == 0) {
-                size_t name_len = strlen(regions[i].name);
-                if (used + name_len < out_size) {
-                    memcpy(out + used, regions[i].name, name_len);
-                    used += name_len;
-                }
-                p += code_len;
-                replaced = true;
-                break;
-            }
-        }
-        if (!replaced) out[used++] = *p++;
-    }
-    out[used] = 0;
-    /* Removing dump-status tags may leave duplicate or trailing spaces. */
-    char* src = out;
-    char* dst = out;
-    bool previous_space = false;
-    while (*src) {
-        bool space = *src == ' ' || *src == '\t';
-        if (!space || !previous_space) *dst++ = space ? ' ' : *src;
-        previous_space = space;
-        src++;
-    }
-    while (dst > out && dst[-1] == ' ') --dst;
-    *dst = 0;
-}
-
 static int download_thumbnail_collection(const char* base_url, const PlatformInfo* platform,
                                          const char* type, const ThumbnailLabels* labels,
-                                         int* downloaded, int* skipped, int* missing, int* failed) {
+                                         int* downloaded, int* skipped, int* missing, int* failed,
+                                         int* processed, int total) {
     CURL* encoder = curl_easy_init();
     if (!encoder) return 1;
     char* system_encoded = curl_easy_escape(encoder, platform->name, 0);
@@ -769,28 +802,70 @@ static int download_thumbnail_collection(const char* base_url, const PlatformInf
 
     log_add(LOG_LEVEL_INFO, "[THUMBNAILS] %s / %s (%d ROMs)", platform->name, type, labels->count);
 
+    char collection_url[4096];
+    snprintf(collection_url, sizeof(collection_url), "%s/%s/%s/", base_url, system_encoded, type);
+    ThumbnailCatalog catalog;
+    if (!load_thumbnail_catalog(collection_url, &catalog)) {
+        log_add(LOG_LEVEL_ERROR, "Could not read thumbnail name index: %s", collection_url);
+        curl_free(system_encoded);
+        curl_easy_cleanup(encoder);
+        return 1;
+    }
+
     char destination_dir[MAX_PATH_LEN];
     snprintf(destination_dir, sizeof(destination_dir), "%.1000s/thumbnails/%.500s/%s",
              g_config.ra_dir, platform->name, type);
     fs_mkdir_p(destination_dir);
 
     for (int i = 0; i < labels->count && !g_task_mgr.cancel_requested; ++i) {
-        char remote_label[2048], remote_name[2048], local_name[2100];
-        normalize_goodtools_label(remote_label, sizeof(remote_label), labels->items[i]);
-        thumbnail_filename(remote_name, sizeof(remote_name), remote_label);
+        char local_name[2100];
         thumbnail_filename(local_name, sizeof(local_name), labels->items[i]);
-        char* encoded_name = curl_easy_escape(encoder, remote_name, 0);
-        if (!encoded_name) { (*failed)++; continue; }
-        char source[6144], destination[MAX_PATH_LEN];
-        snprintf(source, sizeof(source), "%s/%s/%s/%s.png", base_url, system_encoded, type, encoded_name);
+        char destination[MAX_PATH_LEN];
         strncat(local_name, ".png", sizeof(local_name) - strlen(local_name) - 1);
         fs_join_path(destination, sizeof(destination), destination_dir, local_name);
-        curl_free(encoded_name);
 
         bool existed = fs_is_file(destination) && fs_file_size(destination) > 0;
+        bool success = false;
         DownloadResult result;
-        if (download_file(source, destination, download_progress_cb, NULL,
-                          &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &result)) {
+        memset(&result, 0, sizeof(result));
+        if (existed) {
+            success = true;
+            result.state = DOWNLOAD_SKIPPED;
+        } else {
+            const char* matched = catalog_match(&catalog, labels->items[i]);
+            const char* candidates[] = {matched};
+            int candidate_count = 1;
+            if (!matched) result.http_status = 404;
+            for (int candidate = 0; candidate < candidate_count && !success && !g_task_mgr.cancel_requested; ++candidate) {
+                char remote_name[2048], source[6144], attempt_path[MAX_PATH_LEN], attempt_part[MAX_PATH_LEN];
+                if (!candidates[candidate] || !candidates[candidate][0]) continue;
+                if (candidate > 0 && candidates[candidate - 1] && !strcmp(candidates[candidate], candidates[candidate - 1])) continue;
+                thumbnail_filename(remote_name, sizeof(remote_name), candidates[candidate]);
+                char* encoded_name = curl_easy_escape(encoder, remote_name, 0);
+                if (!encoded_name) continue;
+                snprintf(source, sizeof(source), "%s/%s/%s/%s.png", base_url, system_encoded, type, encoded_name);
+                curl_free(encoded_name);
+                snprintf(attempt_path, sizeof(attempt_path), "%.1900s.lookup%d.png", destination, candidate + 1);
+                snprintf(attempt_part, sizeof(attempt_part), "%.1900s.part", attempt_path);
+                success = download_file(source, attempt_path, download_progress_cb, NULL,
+                                        &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &result);
+                if (success) {
+                    if (rename(attempt_path, destination) != 0) {
+                        success = fs_copy_file(attempt_path, destination);
+                        if (success) fs_remove_file(attempt_path);
+                    }
+                    if (!success) {
+                        (*failed)++;
+                        log_add(LOG_LEVEL_ERROR, "Could not save thumbnail as: %s", destination);
+                    }
+                } else {
+                    fs_remove_file(attempt_path);
+                    fs_remove_file(attempt_part);
+                    if (result.http_status != 404) break;
+                }
+            }
+        }
+        if (success) {
             if (existed || result.state == DOWNLOAD_SKIPPED) (*skipped)++;
             else (*downloaded)++;
         } else if (!g_task_mgr.cancel_requested) {
@@ -799,8 +874,15 @@ static int download_thumbnail_collection(const char* base_url, const PlatformInf
                 log_add(LOG_LEVEL_WARN, "Image not found: %s / %s / %s", platform->name, type, labels->items[i]);
             } else (*failed)++;
         }
+        (*processed)++;
+        SDL_AtomicSet(&g_task_mgr.work_completed, *processed);
+        g_task_mgr.progress = total > 0 ? (float)(*processed) / (float)total : 1.0f;
+        snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message),
+                 "%s: %d/%d (%.1f%%)", platform->name, *processed, total,
+                 total > 0 ? 100.0 * (double)(*processed) / (double)total : 100.0);
     }
 
+    free_thumbnail_catalog(&catalog);
     curl_free(system_encoded);
     curl_easy_cleanup(encoder);
     return g_task_mgr.cancel_requested ? -1 : 0;
@@ -829,26 +911,31 @@ static int do_task_thumbnails(void) {
     const char* types[] = {"Named_Boxarts", "Named_Snaps", "Named_Titles"};
     int downloaded = 0, skipped = 0, missing = 0, failed = 0, processed = 0;
     int platforms_without_roms = 0;
-    SDL_AtomicSet(&g_task_mgr.work_total, selected_count * 3);
+    int total = 0;
+    for (int i = 0; i < TOTAL_PLATFORMS; ++i) {
+        if (!g_platforms[i].selected) continue;
+        ThumbnailLabels count_labels;
+        if (load_thumbnail_labels(&g_platforms[i], &count_labels)) {
+            total += count_labels.count * 3;
+            free_thumbnail_labels(&count_labels);
+        }
+    }
+    SDL_AtomicSet(&g_task_mgr.work_total, total);
+    log_add(LOG_LEVEL_INFO, "Thumbnail range: 0/%d (0.0%%) to %d/%d (100.0%%)", total, total, total);
     for (int i = 0; i < TOTAL_PLATFORMS && !g_task_mgr.cancel_requested; ++i) {
         if (!g_platforms[i].selected) continue;
         ThumbnailLabels labels;
         if (!load_thumbnail_labels(&g_platforms[i], &labels)) {
             log_add(LOG_LEVEL_WARN, "NO ROMS FOUND: %s; no thumbnails will be downloaded.", g_platforms[i].name);
             platforms_without_roms++;
-            processed += 3;
-            SDL_AtomicSet(&g_task_mgr.work_completed, processed);
-            g_task_mgr.progress = (float)processed / (float)(selected_count * 3);
             continue;
         }
         for (int type = 0; type < 3 && !g_task_mgr.cancel_requested; ++type) {
             snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message),
                      "%s: %s", g_platforms[i].name, types[type]);
             int result = download_thumbnail_collection(base_url, &g_platforms[i], types[type], &labels,
-                                                       &downloaded, &skipped, &missing, &failed);
-            processed++;
-            SDL_AtomicSet(&g_task_mgr.work_completed, processed);
-            g_task_mgr.progress = (float)processed / (float)(selected_count * 3);
+                                                       &downloaded, &skipped, &missing, &failed,
+                                                       &processed, total);
             if (result > 0) failed++;
         }
         free_thumbnail_labels(&labels);
