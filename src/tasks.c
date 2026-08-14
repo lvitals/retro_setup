@@ -80,6 +80,36 @@ static bool ensure_core_info_for_selected(void) {
     return true;
 }
 
+static bool ensure_retroarch_databases(void) {
+    char database_dir[MAX_PATH_LEN];
+    fs_join_path(database_dir, sizeof(database_dir), g_config.ra_dir, "database/rdb");
+    fs_mkdir_p(database_dir);
+    DIR* dir = opendir(database_dir);
+    bool found = false;
+    if (dir) {
+        struct dirent* entry;
+        while ((entry = readdir(dir))) {
+            size_t length = strlen(entry->d_name);
+            if (length > 4 && !strcasecmp(entry->d_name + length - 4, ".rdb")) { found = true; break; }
+        }
+        closedir(dir);
+    }
+    if (found) return true;
+
+    const char* url = url_config_get_string("DATABASE_RDB_URL",
+        "https://buildbot.libretro.com/assets/frontend/database-rdb.zip");
+    char archive[MAX_PATH_LEN];
+    fs_join_path(archive, sizeof(archive), g_config.config_dir, "database-rdb.zip");
+    DownloadResult result;
+    log_add(LOG_LEVEL_INFO, "[DOWNLOAD] RetroArch game-name databases");
+    if (!download_file(url, archive, download_progress_cb, NULL,
+                       &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &result)) return false;
+    log_add(LOG_LEVEL_INFO, "[EXTRACT] RetroArch game-name databases");
+    if (!fs_extract_archive(archive, database_dir)) return false;
+    fs_remove_file(archive);
+    return true;
+}
+
 static void configure_retroarch_paths(void) {
     char config_path[MAX_PATH_LEN];
     fs_join_path(config_path, sizeof(config_path), g_config.ra_dir, "retroarch.cfg");
@@ -328,6 +358,8 @@ static int do_task_install(void) {
     fs_join_path(install_dir, sizeof(install_dir), g_config.ra_dir, "playlists"); fs_mkdir_p(install_dir);
     if (!ensure_core_info_for_selected())
         log_add(LOG_LEVEL_WARN, "Core information could not be completely installed.");
+    if (!ensure_retroarch_databases())
+        log_add(LOG_LEVEL_WARN, "Game-name databases could not be installed; arcade shortnames may remain unresolved.");
     configure_retroarch_paths();
 
     SDL_atomic_t error_counter;
@@ -674,6 +706,8 @@ static void thumbnail_match_key(char* out, size_t out_size, const char* name) {
     size_t used = 0;
     const char* end = strstr(name, " (");
     if (!end) end = name + strlen(name);
+    const char* alias = strstr(name, " / ");
+    if (alias && alias < end) end = alias;
     for (const char* p = name; p < end && used + 1 < out_size; p++) {
         if (isalnum((unsigned char)*p)) out[used++] = (char)tolower((unsigned char)*p);
     }
@@ -897,18 +931,22 @@ static int do_task_thumbnails(void) {
         return 1;
     }
 
+    url_config_load(g_config.url_config_file);
+    if (!ensure_retroarch_databases())
+        log_add(LOG_LEVEL_WARN, "Game-name databases are unavailable; some arcade names may remain unresolved.");
+
     /* Refresh labels so deleted or newly added ROMs cannot leave thumbnail
        downloads based on a stale playlist. */
     playlist_generate_selected(g_config.ra_dir, g_config.rom_dir);
 
-    url_config_load(g_config.url_config_file);
     const char* configured_base = url_config_get_string("THUMBNAILS_BASE_URL", "https://thumbnails.libretro.com");
     char base_url[2048];
     snprintf(base_url, sizeof(base_url), "%s", configured_base);
     size_t base_length = strlen(base_url);
     while (base_length > 0 && base_url[base_length - 1] == '/') base_url[--base_length] = 0;
 
-    const char* types[] = {"Named_Boxarts", "Named_Snaps", "Named_Titles"};
+    const char* types[] = {"Named_Boxarts"};
+    const int type_count = (int)(sizeof(types) / sizeof(types[0]));
     int downloaded = 0, skipped = 0, missing = 0, failed = 0, processed = 0;
     int platforms_without_roms = 0;
     int total = 0;
@@ -916,7 +954,7 @@ static int do_task_thumbnails(void) {
         if (!g_platforms[i].selected) continue;
         ThumbnailLabels count_labels;
         if (load_thumbnail_labels(&g_platforms[i], &count_labels)) {
-            total += count_labels.count * 3;
+            total += count_labels.count * type_count;
             free_thumbnail_labels(&count_labels);
         }
     }
@@ -930,7 +968,7 @@ static int do_task_thumbnails(void) {
             platforms_without_roms++;
             continue;
         }
-        for (int type = 0; type < 3 && !g_task_mgr.cancel_requested; ++type) {
+        for (int type = 0; type < type_count && !g_task_mgr.cancel_requested; ++type) {
             snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message),
                      "%s: %s", g_platforms[i].name, types[type]);
             int result = download_thumbnail_collection(base_url, &g_platforms[i], types[type], &labels,

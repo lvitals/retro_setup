@@ -14,7 +14,7 @@ load_url_config
 THUMB_DIR="$RA_DIR/thumbnails"
 PLAYLIST_DIR="$RA_DIR/playlists"
 BASE_URL="${THUMBNAILS_BASE_URL:-https://thumbnails.libretro.com}"
-TYPES=("Named_Boxarts" "Named_Snaps" "Named_Titles")
+TYPES=("Named_Boxarts")
 
 UA="Mozilla/5.0 (X11; Linux) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"
 WGET_OPTS=(
@@ -66,7 +66,7 @@ thumbnail_name() {
 catalog_match() {
     python3 -c 'import re, sys, urllib.parse
 label, path = sys.argv[1:]
-key = lambda s: "".join(c.lower() for c in s.split(" (")[0] if c.isalnum())
+key = lambda s: "".join(c.lower() for c in s.split(" / ")[0].split(" (")[0] if c.isalnum())
 wanted = key(label)
 data = open(path, encoding="utf-8", errors="ignore").read()
 for href in re.findall(r"href=\"([^\"]+\.png)\"", data, re.I):
@@ -134,7 +134,7 @@ for platform in "${SELECTED_PLATFORMS[@]}"; do
     playlist="$PLAYLIST_DIR/$system.lpl"
     if [ -f "$playlist" ]; then
         count="$(grep -c '^[[:space:]]*"label": ' "$playlist" || true)"
-        total=$((total + count * 3))
+        total=$((total + count))
     fi
 done
 

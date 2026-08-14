@@ -25,7 +25,7 @@ static const MenuOption g_menu_options[] = {
     { TASK_NONE,      "--select",    "SELECT PLATFORMS",            "Choose platforms to install and configure",                        { 52, 152, 219, 255 } },
     { TASK_INSTALL,   "--install",   "INSTALL PLATFORMS & ASSETS",  "Download cores, BIOS, and ROMs for selected platforms",          { 230, 126,  34, 255 } },
     { TASK_UNINSTALL, "--uninstall", "UNINSTALL PLATFORMS",         "Remove ROMs, cores, playlists, and BIOS",                        { 231,  76,  60, 255 } },
-    { TASK_THUMBNAILS,"--thumbnails", "DOWNLOAD THUMBNAILS",        "Download boxart, snaps, and title artwork",                        { 155,  89, 182, 255 } },
+    { TASK_THUMBNAILS,"--thumbnails", "DOWNLOAD THUMBNAILS",        "Download one boxart thumbnail for each installed ROM",             { 155,  89, 182, 255 } },
     { TASK_IMPLODE,   "--implode",   "RESET CONFIGURATION",         "Reset local configuration and clear generated files",            { 192,  57,  43, 255 } },
     { TASK_STATUS,    "--status",    "SYSTEM STATUS",               "View system distribution, mode, and saved settings",              { 241, 196,  15, 255 } },
     { TASK_INSTALLATION_DIAGNOSTIC, "--diagnostic", "INSTALLATION DIAGNOSTIC", "Audit platform health, obsolete installs, and configured URLs", { 26, 188, 156, 255 } }
