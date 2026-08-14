@@ -110,6 +110,50 @@ static bool ensure_retroarch_databases(void) {
     return true;
 }
 
+static void cleanup_obsolete_managed_playlists(void) {
+    char playlist_dir[MAX_PATH_LEN];
+    fs_join_path(playlist_dir, sizeof(playlist_dir), g_config.ra_dir, "playlists");
+    DIR* dir = opendir(playlist_dir);
+    if (!dir) return;
+    struct dirent* entry;
+    while ((entry = readdir(dir))) {
+        size_t name_length = strlen(entry->d_name);
+        if (name_length <= 4 || strcasecmp(entry->d_name + name_length - 4, ".lpl")) continue;
+        char playlist[MAX_PATH_LEN];
+        fs_join_path(playlist, sizeof(playlist), playlist_dir, entry->d_name);
+        FILE* file = fopen(playlist, "r");
+        if (!file) continue;
+        char line[4096], marker[MAX_PATH_LEN];
+        snprintf(marker, sizeof(marker), "%.1800s/", g_config.rom_dir);
+        char obsolete_id[128] = {0};
+        while (fgets(line, sizeof(line), file)) {
+            char* path = strstr(line, marker);
+            if (!path) continue;
+            path += strlen(marker);
+            size_t length = strcspn(path, "/\\\"");
+            if (!length || length >= sizeof(obsolete_id)) break;
+            memcpy(obsolete_id, path, length); obsolete_id[length] = 0;
+            if (get_platform_index_by_id(obsolete_id) >= 0) obsolete_id[0] = 0;
+            break;
+        }
+        fclose(file);
+        if (!obsolete_id[0]) continue;
+
+        char playlist_name[512];
+        size_t copy = name_length - 4;
+        if (copy >= sizeof(playlist_name)) copy = sizeof(playlist_name) - 1;
+        memcpy(playlist_name, entry->d_name, copy); playlist_name[copy] = 0;
+        if (fs_remove_file(playlist))
+            log_add(LOG_LEVEL_INFO, "Removed obsolete managed playlist: %s (platform id: %s)", playlist, obsolete_id);
+        char thumbnail_root[MAX_PATH_LEN], thumbnail_dir[MAX_PATH_LEN];
+        fs_join_path(thumbnail_root, sizeof(thumbnail_root), g_config.ra_dir, "thumbnails");
+        fs_join_path(thumbnail_dir, sizeof(thumbnail_dir), thumbnail_root, playlist_name);
+        if (fs_is_dir(thumbnail_dir) && fs_remove_dir_recursive(thumbnail_dir, thumbnail_root))
+            log_add(LOG_LEVEL_INFO, "Removed obsolete thumbnail directory: %s", thumbnail_dir);
+    }
+    closedir(dir);
+}
+
 static void configure_retroarch_paths(void) {
     char config_path[MAX_PATH_LEN];
     fs_join_path(config_path, sizeof(config_path), g_config.ra_dir, "retroarch.cfg");
@@ -349,6 +393,7 @@ static int do_task_install(void) {
 
     url_config_load(g_config.url_config_file);
     download_manager_reset();
+    cleanup_obsolete_managed_playlists();
     SDL_AtomicSet(&g_task_mgr.work_completed, 0);
     SDL_AtomicSet(&g_task_mgr.work_total, selected_cnt + 1); /* platforms plus playlist generation */
 
@@ -953,6 +998,7 @@ static int do_task_thumbnails(void) {
     }
 
     url_config_load(g_config.url_config_file);
+    cleanup_obsolete_managed_playlists();
     if (!ensure_retroarch_databases())
         log_add(LOG_LEVEL_WARN, "Game-name databases are unavailable; some arcade names may remain unresolved.");
 

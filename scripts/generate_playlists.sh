@@ -14,6 +14,24 @@ PLAYLIST_DIR="$RA_DIR/playlists"
 CORES_DIR="$RA_DIR/cores"
 mkdir -p "$PLAYLIST_DIR"
 
+cleanup_obsolete_managed_playlists() {
+    local playlist line rest platform_id playlist_name
+    for playlist in "$PLAYLIST_DIR"/*.lpl; do
+        [ -f "$playlist" ] || continue
+        line="$(grep -m1 -F "\"path\": \"$ROM_BASE_DIR/" "$playlist" || true)"
+        [ -n "$line" ] || continue
+        rest="${line#*\"path\": \"$ROM_BASE_DIR/}"
+        platform_id="${rest%%/*}"
+        platform_exists "$platform_id" && continue
+        playlist_name="$(basename "$playlist" .lpl)"
+        rm -f "$playlist"
+        rm -rf "$RA_DIR/thumbnails/$playlist_name"
+        echo "Removed obsolete managed playlist and thumbnails: $playlist_name ($platform_id)"
+    done
+}
+
+cleanup_obsolete_managed_playlists
+
 json_escape() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
