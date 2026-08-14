@@ -886,6 +886,11 @@ bool task_start_async(TaskType task, const char* extra_args) {
     (void)extra_args;
     if (g_task_mgr.is_running) return false;
 
+    if (g_task_mgr.thread) {
+        SDL_WaitThread(g_task_mgr.thread, NULL);
+        g_task_mgr.thread = NULL;
+    }
+
     log_clear();
     g_task_mgr.task = task;
     g_task_mgr.is_running = true;
@@ -911,7 +916,7 @@ bool task_start_async(TaskType task, const char* extra_args) {
 }
 
 void task_cancel(void) {
-    if (g_task_mgr.is_running) {
+    if (g_task_mgr.is_running && !g_task_mgr.cancel_requested) {
         g_task_mgr.cancel_requested = true;
         log_add(LOG_LEVEL_WARN, "Task cancellation requested by user.");
     }

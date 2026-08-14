@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <locale.h>
 #include "config.h"
 #include "platform_data.h"
 #include "audio.h"
@@ -27,6 +28,8 @@ static void print_cli_help(const char* prog_name) {
 }
 
 int main(int argc, char* argv[]) {
+    /* libarchive uses the process locale when converting archive entry names. */
+    if (!setlocale(LC_ALL, "")) setlocale(LC_ALL, "C.UTF-8");
     init_config();
 
     bool force_gui = false;

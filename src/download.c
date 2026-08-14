@@ -336,7 +336,12 @@ bool download_file(const char* url, const char* destination, DownloadProgressCal
     if (task) { task->local_size = part_size > 0 ? part_size : final_size; task->can_resume = part_size > 0; }
     manager_unlock();
 
-    if (!have_remote && remote.status >= 400 && remote.status != 405 && remote.status != 501) {
+    /* A number of file hosts (notably Archive.org mirrors) intermittently fail
+       HEAD requests while the corresponding GET remains available.  A 4xx is
+       useful evidence that the configured object is unavailable, but a 5xx
+       from this optional probe must not prevent the real transfer attempt. */
+    if (!have_remote && remote.status >= 400 && remote.status < 500 &&
+        remote.status != 405) {
         result.http_status = remote.status;
         snprintf(result.error, sizeof(result.error), "HTTP %ld: URL check failed", remote.status);
         manager_update(id, DOWNLOAD_FAILED, 0, remote.size, 0, remote.status, result.error);

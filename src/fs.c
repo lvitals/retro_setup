@@ -190,8 +190,27 @@ bool fs_extract_archive(const char* archive_path, const char* dest_dir) {
     }
 
     bool success = true;
-    while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
-        const char* current_file = archive_entry_pathname(entry);
+    int header_status;
+    while ((header_status = archive_read_next_header(a, &entry)) == ARCHIVE_OK ||
+           header_status == ARCHIVE_WARN) {
+        const char* warning = header_status == ARCHIVE_WARN ? archive_error_string(a) : NULL;
+        bool pathname_warning = warning &&
+            (strstr(warning, "Pathname cannot be converted") ||
+             strstr(warning, "Can't translate pathname"));
+        if (header_status == ARCHIVE_WARN && !pathname_warning) {
+            log_add(LOG_LEVEL_ERROR, "Archive header error: %s", warning ? warning : "unknown warning");
+            success = false;
+            break;
+        }
+
+        const char* current_file = archive_entry_pathname_utf8(entry);
+        if (!current_file || !*current_file) current_file = archive_entry_pathname(entry);
+        if (!current_file || !*current_file) {
+            log_add(LOG_LEVEL_ERROR, "Archive entry has no usable pathname: %s",
+                    warning ? warning : archive_path);
+            success = false;
+            break;
+        }
         char full_dest[4096];
         snprintf(full_dest, sizeof(full_dest), "%s/%s", dest_dir, current_file);
 
@@ -221,6 +240,12 @@ bool fs_extract_archive(const char* archive_path, const char* dest_dir) {
         archive_write_finish_entry(ext);
     }
 
+    if (header_status != ARCHIVE_EOF && success) {
+        log_add(LOG_LEVEL_ERROR, "Archive read error: %s",
+                archive_error_string(a) ? archive_error_string(a) : "unexpected end of archive");
+        success = false;
+    }
+
     archive_read_close(a);
     archive_read_free(a);
     archive_write_close(ext);
@@ -245,12 +270,19 @@ bool fs_validate_archive(const char* archive_path, char* error, size_t error_siz
     struct archive_entry* entry = NULL;
     int rc;
     int entries = 0;
-    char buffer[65536];
-    while ((rc = archive_read_next_header(archive, &entry)) == ARCHIVE_OK) {
+    while ((rc = archive_read_next_header(archive, &entry)) == ARCHIVE_OK || rc == ARCHIVE_WARN) {
+        if (rc == ARCHIVE_WARN) {
+            const char* warning = archive_error_string(archive);
+            bool pathname_warning = warning &&
+                (strstr(warning, "Pathname cannot be converted") ||
+                 strstr(warning, "Can't translate pathname"));
+            if (!pathname_warning) break;
+        }
         entries++;
-        la_ssize_t bytes;
-        while ((bytes = archive_read_data(archive, buffer, sizeof(buffer))) > 0) {}
-        if (bytes < 0) { rc = ARCHIVE_FATAL; break; }
+        /* Validate the archive structure without reading multi-gigabyte payloads
+           twice. Extraction performs the complete data/CRC read immediately after. */
+        int skip_status = archive_read_data_skip(archive);
+        if (skip_status < ARCHIVE_WARN) { rc = skip_status; break; }
     }
     if (rc != ARCHIVE_EOF || entries == 0) {
         if (error) snprintf(error, error_size, "%s", archive_error_string(archive) ? archive_error_string(archive) : "Archive has no entries");
