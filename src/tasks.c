@@ -703,13 +703,31 @@ static size_t thumbnail_catalog_write(void* data, size_t size, size_t nmemb, voi
 }
 
 static void thumbnail_match_key(char* out, size_t out_size, const char* name) {
-    size_t used = 0;
     const char* end = strstr(name, " (");
     if (!end) end = name + strlen(name);
     const char* alias = strstr(name, " / ");
     if (alias && alias < end) end = alias;
-    for (const char* p = name; p < end && used + 1 < out_size; p++) {
-        if (isalnum((unsigned char)*p)) out[used++] = (char)tolower((unsigned char)*p);
+    char words[64][64]; int count = 0;
+    for (const char* p = name; p < end && count < 64;) {
+        while (p < end && !isalnum((unsigned char)*p)) p++;
+        if (p >= end) break;
+        size_t length = 0;
+        while (p < end && isalnum((unsigned char)*p)) {
+            if (length + 1 < sizeof(words[0])) words[count][length++] = (char)tolower((unsigned char)*p);
+            p++;
+        }
+        words[count][length] = 0;
+        if (length) count++;
+    }
+    for (int i = 0; i < count; ++i)
+        for (int j = i + 1; j < count; ++j)
+            if (strcmp(words[i], words[j]) > 0) { char tmp[64]; memcpy(tmp, words[i], 64); memcpy(words[i], words[j], 64); memcpy(words[j], tmp, 64); }
+    size_t used = 0;
+    for (int i = 0; i < count && used + 1 < out_size; ++i) {
+        size_t length = strlen(words[i]);
+        if (used + length + 1 >= out_size) break;
+        if (used) out[used++] = '|';
+        memcpy(out + used, words[i], length); used += length;
     }
     out[used] = 0;
 }
@@ -905,7 +923,10 @@ static int download_thumbnail_collection(const char* base_url, const PlatformInf
         } else if (!g_task_mgr.cancel_requested) {
             if (result.http_status == 404) {
                 (*missing)++;
-                log_add(LOG_LEVEL_WARN, "Image not found: %s / %s / %s", platform->name, type, labels->items[i]);
+                if (*missing <= 10)
+                    log_add(LOG_LEVEL_INFO, "No catalog image: %s / %s / %s", platform->name, type, labels->items[i]);
+                else if (*missing == 11)
+                    log_add(LOG_LEVEL_INFO, "Additional catalog absences will be counted without individual log lines.");
             } else (*failed)++;
         }
         (*processed)++;
@@ -984,10 +1005,10 @@ static int do_task_thumbnails(void) {
         return -1;
     }
     log_add(failed ? LOG_LEVEL_WARN : LOG_LEVEL_INFO,
-            "=== Thumbnails Completed: %d downloaded, %d existing, %d images not found, %d systems without ROMs, %d errors ===",
+            "=== Thumbnails Completed: %d downloaded, %d existing, %d unavailable in catalog, %d systems without ROMs, %d errors ===",
             downloaded, skipped, missing, platforms_without_roms, failed);
     snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message),
-             "Thumbnails: %d downloaded, %d existing, %d not found, %d without ROMs, %d errors.",
+             "Thumbnails: %d downloaded, %d existing, %d unavailable, %d without ROMs, %d errors.",
              downloaded, skipped, missing, platforms_without_roms, failed);
     g_task_mgr.progress = 1.0f;
     return failed ? 1 : 0;

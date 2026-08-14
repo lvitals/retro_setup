@@ -66,7 +66,9 @@ thumbnail_name() {
 catalog_match() {
     python3 -c 'import re, sys, urllib.parse
 label, path = sys.argv[1:]
-key = lambda s: "".join(c.lower() for c in s.split(" / ")[0].split(" (")[0] if c.isalnum())
+def key(s):
+    title = s.split(" / ")[0].split(" (")[0]
+    return "|".join(sorted(re.findall(r"\w+", title.casefold(), re.UNICODE)))
 wanted = key(label)
 data = open(path, encoding="utf-8", errors="ignore").read()
 for href in re.findall(r"href=\"([^\"]+\.png)\"", data, re.I):
@@ -107,7 +109,11 @@ download_thumbnail() {
         fi
         if [ "$success" = false ]; then
             missing=$((missing + 1))
-            echo "IMAGE NOT FOUND: $system / $type / $label"
+            if [ "$missing" -le 10 ]; then
+                echo "NO CATALOG IMAGE: $system / $type / $label"
+            elif [ "$missing" -eq 11 ]; then
+                echo "Additional catalog absences will only be counted."
+            fi
         fi
     fi
     processed=$((processed + 1))
@@ -176,4 +182,4 @@ for platform in "${SELECTED_PLATFORMS[@]}"; do
     done
 done
 
-echo "=== Thumbnail Download Complete: $downloaded downloaded, $skipped existing, $missing images not found, $platforms_without_roms systems without ROMs ==="
+echo "=== Thumbnail Download Complete: $downloaded downloaded, $skipped existing, $missing unavailable in catalog, $platforms_without_roms systems without ROMs ==="

@@ -7,7 +7,7 @@ PLATFORM_IDS=(
     nes snes n64 gb gbc gba fds satellaview gamecube ps1
     mastersystem gamegear megadrive sega32x segacd sg1000 saturn
     neogeo neogeocd neogeopocket neogeopocketcolor
-    msx msx2 msxturbor
+    msx msx2
     atomiswave flycast
     turbografx wonderswan colecovision intellivision odyssey2 pcfx
     atari2600 atari5200 atari7800 atarilynx atarijaguar atarijaguarcd
@@ -37,7 +37,6 @@ declare -A PLATFORM_NAME=(
     [neogeopocketcolor]="SNK - Neo Geo Pocket Color"
     [msx]="Microsoft - MSX"
     [msx2]="Microsoft - MSX2"
-    [msxturbor]="Microsoft - MSX TurboR"
     [atomiswave]="Arcade - Sammy Atomiswave"
     [flycast]="Arcade - Sega NAOMI"
     [turbografx]="NEC - PC Engine - TurboGrafx 16"
@@ -78,7 +77,6 @@ declare -A PLATFORM_CORE=(
     [neogeopocketcolor]="mednafen_ngp_libretro.so|SNK - Neo Geo Pocket / Color (Beetle NeoPop)"
     [msx]="bluemsx_libretro.so|MSX/SVI/ColecoVision/SG-1000 (blueMSX)"
     [msx2]="bluemsx_libretro.so|MSX/SVI/ColecoVision/SG-1000 (blueMSX)"
-    [msxturbor]="bluemsx_libretro.so|MSX/SVI/ColecoVision/SG-1000 (blueMSX)"
     [atomiswave]="flycast_libretro.so|Sega - Dreamcast/NAOMI (Flycast)"
     [flycast]="flycast_libretro.so|Sega - Dreamcast/NAOMI (Flycast)"
     [turbografx]="mednafen_pce_fast_libretro.so|NEC - PC Engine / CD (Beetle PCE FAST)"
@@ -101,7 +99,7 @@ declare -A PLATFORM_EXTENSIONS=(
     [mastersystem]="sms" [gamegear]="gg" [megadrive]="md gen bin" [sega32x]="32x"
     [segacd]="chd cue iso" [sg1000]="sg" [saturn]="chd cue iso"
     [neogeo]="zip" [neogeocd]="chd cue iso" [neogeopocket]="ngp" [neogeopocketcolor]="ngc"
-    [msx]="rom mx1 mx2 dsk" [msx2]="rom mx1 mx2 dsk" [msxturbor]="rom mx1 mx2 dsk"
+    [msx]="rom mx1 mx2 dsk" [msx2]="rom mx1 mx2 dsk"
     [atomiswave]="zip chd" [flycast]="zip chd"
     [turbografx]="pce chd cue" [wonderswan]="ws wsc" [colecovision]="col"
     [intellivision]="int bin" [odyssey2]="bin" [pcfx]="chd cue"
@@ -120,7 +118,6 @@ declare -A PLATFORM_BIOS=(
     [neogeocd]="neocd/front-sp1.bin neocd/top-sp1.bin neocd/neocd.bin"
     [msx]="Machines Databases"
     [msx2]="Machines Databases"
-    [msxturbor]="Machines Databases"
     [colecovision]="Machines Databases"
     [intellivision]="exec.bin grom.bin"
     [odyssey2]="o2rom.bin"
