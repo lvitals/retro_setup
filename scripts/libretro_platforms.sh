@@ -95,13 +95,9 @@ declare -A PLATFORM_CORE=(
     [atarijaguarcd]="virtualjaguar_libretro.so|Atari - Jaguar (Virtual Jaguar)"
 )
 
-declare -A PLATFORM_FALLBACK_CORE=(
-    [ps2]="play_libretro.so|Sony - PlayStation 2 (Play!)"
-)
+declare -A PLATFORM_FALLBACK_CORE=()
 
-declare -A PLATFORM_FALLBACK_WITHOUT_BIOS=(
-    [ps2]="true"
-)
+declare -A PLATFORM_FALLBACK_WITHOUT_BIOS=()
 
 declare -A PLATFORM_CORE_CONFIG_NAME=(
     [ps2]="LRPS2"
@@ -112,20 +108,14 @@ declare -A PLATFORM_CORE_OPTIONS=(
 )
 
 declare -A PLATFORM_FRONTEND_OPTIONS=(
-    [ps2]='video_threaded = "true"; video_vsync = "true"; audio_latency = "128"'
+    [ps2]='video_driver = "vulkan"; video_threaded = "true"; video_vsync = "true"; audio_latency = "128"; audio_sync = "true"; run_ahead_enabled = "false"; rewind_enable = "false"'
 )
 
-declare -A PLATFORM_FALLBACK_CONFIG_NAME=(
-    [ps2]="Play!"
-)
+declare -A PLATFORM_FALLBACK_CONFIG_NAME=()
 
-declare -A PLATFORM_FALLBACK_CORE_OPTIONS=(
-    [ps2]='play_bilinear_filtering = "false"; play_presentation_mode = "Fit Screen"; play_res_multi = "1x"'
-)
+declare -A PLATFORM_FALLBACK_CORE_OPTIONS=()
 
-declare -A PLATFORM_FALLBACK_FRONTEND_OPTIONS=(
-    [ps2]='video_threaded = "true"; video_vsync = "true"; audio_latency = "128"'
-)
+declare -A PLATFORM_FALLBACK_FRONTEND_OPTIONS=()
 
 declare -A PLATFORM_BIOS_INSTALL_DIRECTORY=(
     [ps2]="pcsx2/bios"
@@ -178,6 +168,10 @@ declare -A PLATFORM_BIOS_COPY_EXTENSIONS=(
 
 declare -A PLATFORM_BIOS_MIN_SIZE=(
     [ps2]="4194304"
+)
+
+declare -A PLATFORM_BIOS_REQUIRED=(
+    [ps2]="true"
 )
 
 platform_exists() {

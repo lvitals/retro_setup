@@ -264,6 +264,36 @@ static int import_bios_directory(const char* source, const char* destination,
     return imported;
 }
 
+static bool file_has_html_signature(const char* path) {
+    FILE* file = fopen(path, "rb");
+    if (!file) return false;
+    char header[256] = {0};
+    size_t count = fread(header, 1, sizeof(header) - 1, file);
+    fclose(file);
+    for (size_t i = 0; i < count; ++i) header[i] = (char)tolower((unsigned char)header[i]);
+    return strstr(header, "<!doctype html") || strstr(header, "<html");
+}
+
+static int remove_html_firmware_files(const char* directory, const char* extensions) {
+    DIR* dir = opendir(directory);
+    if (!dir) return 0;
+    int removed = 0;
+    struct dirent* entry;
+    while ((entry = readdir(dir))) {
+        if (entry->d_name[0] == '.') continue;
+        char path[MAX_PATH_LEN];
+        fs_join_path(path, sizeof(path), directory, entry->d_name);
+        if (fs_is_dir(path)) removed += remove_html_firmware_files(path, extensions);
+        else if (catalog_extension_allowed(entry->d_name, extensions) &&
+                 file_has_html_signature(path) && fs_remove_file(path)) {
+            log_add(LOG_LEVEL_WARN, "[MIGRATE] Removed HTML masquerading as firmware: %s", path);
+            removed++;
+        }
+    }
+    closedir(dir);
+    return removed;
+}
+
 static int import_platform_bios(const PlatformInfo* p, const char* system_dir) {
     if (!p->bios_files[0]) return 0;
     char source_root[MAX_PATH_LEN];
@@ -278,6 +308,15 @@ static int import_platform_bios(const PlatformInfo* p, const char* system_dir) {
         char source[MAX_PATH_LEN], destination[MAX_PATH_LEN];
         fs_join_path(source, sizeof(source), source_root, relative);
         fs_join_path(destination, sizeof(destination), system_dir, relative);
+        /* For constrained BIOS layouts, do not copy companions until the
+           source set contains a valid primary firmware image. This rejects
+           HTML error pages and incomplete dumper output early. */
+        if ((p->bios_extensions[0] || p->bios_min_size > 0) &&
+            fs_exists(source) && !platform_bios_path_valid(p, source)) {
+            log_add(LOG_LEVEL_WARN, "[BIOS] Ignoring invalid local firmware set for %s: %s",
+                    p->name, source);
+            continue;
+        }
         if (fs_is_dir(source))
             imported += import_bios_directory(source, destination, p->bios_copy_extensions);
         else if (fs_is_file(source) && catalog_extension_allowed(source, p->bios_copy_extensions) &&
@@ -347,6 +386,13 @@ static bool process_platform_downloads(PlatformInfo* p) {
     char sys_dir[MAX_PATH_LEN];
     fs_join_path(sys_dir, sizeof(sys_dir), g_config.ra_dir, "system");
     fs_mkdir_p(sys_dir);
+    if (p->bios_install_directory[0] && p->bios_install_directory[0] != '/' &&
+        !strstr(p->bios_install_directory, "..")) {
+        char managed_bios_dir[MAX_PATH_LEN];
+        fs_join_path(managed_bios_dir, sizeof(managed_bios_dir), sys_dir,
+                     p->bios_install_directory);
+        remove_html_firmware_files(managed_bios_dir, p->bios_copy_extensions);
+    }
     /* Import user-owned firmware before choosing the core. The source and
        destination layouts and accepted companion files are catalog data. */
     import_platform_bios(p, sys_dir);
@@ -1358,6 +1404,15 @@ static bool catalog_has_platform_id(const char* id) {
     return false;
 }
 
+static bool diagnostic_key_is_url(const char* key) {
+    if (!key || !key[0]) return false;
+    if (!strncmp(key, "ROM_CATALOG_INCLUDES_", 21)) return false;
+    /* This value is a prefix used to construct item URLs. Its root is not a
+       downloadable object and Archive.org correctly answers 404 there. */
+    if (!strcmp(key, "ARCHIVE_DOWNLOAD_BASE_URL")) return false;
+    return strstr(key, "URL") != NULL;
+}
+
 static int do_task_installation_diagnostic(void) {
     log_add(LOG_LEVEL_INFO, "=== Installation Diagnostic: %s ===",
             g_config.mode == MODE_STEAM ? "STEAM" : "STANDALONE");
@@ -1365,7 +1420,7 @@ static int do_task_installation_diagnostic(void) {
     int url_total = 0;
     for (int i = 0; i < url_config_get_entry_count(); ++i) {
         const UrlArrayEntry* entry = url_config_get_entry(i);
-        if (entry) url_total += entry->url_count;
+        if (entry && diagnostic_key_is_url(entry->key)) url_total += entry->url_count;
     }
     int total = TOTAL_PLATFORMS + url_total + 1;
     SDL_AtomicSet(&g_task_mgr.work_total, total);
@@ -1410,21 +1465,25 @@ static int do_task_installation_diagnostic(void) {
     for (int i = 0; i < TOTAL_PLATFORMS && !g_task_mgr.cancel_requested; ++i) {
         PlatformInfo* p = &g_platforms[i];
         char core[MAX_PATH_LEN], roms[MAX_PATH_LEN], playlist[MAX_PATH_LEN];
-        snprintf(core, sizeof(core), "%.1000s/cores/%.500s", g_config.ra_dir, p->core_file);
+        char resolved_file[128], resolved_name[128];
+        bool core_installed = platform_resolve_core(p, g_config.ra_dir,
+                                                    resolved_file, sizeof(resolved_file),
+                                                    resolved_name, sizeof(resolved_name),
+                                                    core, sizeof(core));
         fs_join_path(roms, sizeof(roms), g_config.rom_dir, p->id);
         snprintf(playlist, sizeof(playlist), "%.1000s/playlists/%.500s.lpl", g_config.ra_dir, p->name);
-        bool installed = fs_exists(core) || fs_is_dir(roms) || fs_exists(playlist) || p->selected;
+        bool installed = core_installed || fs_is_dir(roms) || fs_exists(playlist) || p->selected;
         if (installed) {
-            bool healthy = p->core_file[0] && fs_is_file(core) && fs_file_size(core) > 0;
+            bool healthy = resolved_file[0] && core_installed;
             if (healthy && fs_is_dir(roms) && !fs_exists(playlist)) healthy = false;
             log_add(healthy ? LOG_LEVEL_INFO : LOG_LEVEL_WARN, "[%s] %s | core:%s roms:%s playlist:%s",
                     healthy ? "HEALTHY" : "INCOMPLETE", p->name,
-                    fs_exists(core) ? "OK" : "MISSING", fs_is_dir(roms) ? "OK" : "NONE",
+                    core_installed ? "OK" : "MISSING", fs_is_dir(roms) ? "OK" : "NONE",
                     fs_exists(playlist) ? "OK" : "MISSING");
             if (!healthy) {
                 warnings++;
                 incomplete_count++;
-                if (!fs_exists(core)) {
+                if (!core_installed) {
                     missing_core_count++;
                     log_add(LOG_LEVEL_INFO, "[ACTION] Select %s and run INSTALL PLATFORMS & ASSETS to install its core.", p->name);
                 } else if (fs_is_dir(roms) && !fs_exists(playlist)) {
@@ -1440,7 +1499,7 @@ static int do_task_installation_diagnostic(void) {
 
     for (int i = 0; i < url_config_get_entry_count() && !g_task_mgr.cancel_requested; ++i) {
         const UrlArrayEntry* entry = url_config_get_entry(i);
-        if (!entry) continue;
+        if (!entry || !diagnostic_key_is_url(entry->key)) continue;
         for (int u = 0; u < entry->url_count && !g_task_mgr.cancel_requested; ++u) {
             long http = 0; curl_off_t size = -1; char error[256] = {0};
             snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message), "Testing URL %d/%d: %s", done - TOTAL_PLATFORMS + 1, url_total, entry->key);

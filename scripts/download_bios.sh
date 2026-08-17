@@ -104,3 +104,13 @@ if ! check_selected_bios "$RA_SYSTEM_DIR"; then
 else
     echo "Expected BIOS files found for selected platforms."
 fi
+
+missing_required=false
+for platform in "${SELECTED_PLATFORMS[@]}"; do
+    if [ "${PLATFORM_BIOS_REQUIRED[$platform]:-false}" = true ] &&
+       ! platform_bios_valid "$platform" "$RA_SYSTEM_DIR"; then
+        echo "ERROR: ${PLATFORM_NAME[$platform]} requires a valid user-provided BIOS before installation can continue."
+        missing_required=true
+    fi
+done
+[ "$missing_required" = false ]

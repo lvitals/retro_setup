@@ -297,16 +297,33 @@ copy_selected_bios() {
         [ -n "${PLATFORM_BIOS[$platform]:-}" ] || continue
 
         for bios in ${PLATFORM_BIOS[$platform]}; do
+            if [ -d "$dst_dir/$bios" ]; then
+                while IFS= read -r -d '' file; do
+                    if head -c 256 "$file" 2>/dev/null | tr '[:upper:]' '[:lower:]' | grep -Eq '<!doctype html|<html'; then
+                        rm -f "$file"
+                        echo "Removed HTML masquerading as firmware: $file"
+                    fi
+                done < <(find "$dst_dir/$bios" -type f -print0 2>/dev/null)
+            fi
+        done
+
+        for bios in ${PLATFORM_BIOS[$platform]}; do
             source="$src_dir/$bios"
             found_path=""
 
             if [ -e "$source" ]; then
                 found_path="$source"
             else
-                found_path="$(find "$src_dir" -name "$(basename "$bios")" -print -quit 2>/dev/null)"
+                found_path="$(find "$src_dir" -mindepth 1 -name "$(basename "$bios")" -print -quit 2>/dev/null)"
             fi
 
             if [ -n "$found_path" ]; then
+                if { [ -n "${PLATFORM_BIOS_EXTENSIONS[$platform]:-}" ] ||
+                     [ "${PLATFORM_BIOS_MIN_SIZE[$platform]:-0}" -gt 0 ]; } &&
+                   ! platform_bios_valid "$platform" "$src_dir"; then
+                    echo "WARNING: ignoring invalid local BIOS set: $platform -> $found_path"
+                    continue
+                fi
                 dest_path="$dst_dir/$bios"
                 if [ -d "$found_path" ]; then
                     mkdir -p "$dest_path"
@@ -377,11 +394,12 @@ platform_selected_core() {
 }
 
 configure_selected_core_profiles() {
-    local platform selected core_file config_name config_dir options frontend_options fallback_file
+    local platform selected core_file config_name config_dir options frontend_options fallback_entry fallback_file
     for platform in "${SELECTED_PLATFORMS[@]}"; do
         selected="$(platform_selected_core "$platform")"
         IFS='|' read -r core_file _ <<< "$selected"
-        fallback_file="${PLATFORM_FALLBACK_CORE[$platform]%%|*}"
+        fallback_entry="${PLATFORM_FALLBACK_CORE[$platform]:-}"
+        fallback_file="${fallback_entry%%|*}"
         if [ -n "$fallback_file" ] && [ "$core_file" = "$fallback_file" ]; then
             config_name="${PLATFORM_FALLBACK_CONFIG_NAME[$platform]:-}"
             options="${PLATFORM_FALLBACK_CORE_OPTIONS[$platform]:-}"

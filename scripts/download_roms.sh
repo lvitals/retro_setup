@@ -74,9 +74,38 @@ download_file() {
     echo "Downloading $platform: $filename"
     if wget "${WGET_OPTS[@]}" "$url" -O "$dest_dir/$filename"; then
         extract_archive_once "$dest_dir/$filename" "$dest_dir"
-    else
-        echo "Download interrupted for $platform. Run again to continue."
+        return 0
     fi
+
+    # Dynamic fallback for Archive.org URLs if primary redirect fails
+    if [[ "$url" =~ archive\.org/download/([^/]+)/(.+) ]]; then
+        local item_id="${BASH_REMATCH[1]}"
+        local item_file="${BASH_REMATCH[2]}"
+        echo "Primary download failed; attempting dynamic mirror resolution for $item_id..."
+        local meta_json
+        meta_json="$(curl -sL --max-time 15 "https://archive.org/metadata/$item_id" 2>/dev/null || true)"
+        if [ -n "$meta_json" ]; then
+            local workable_servers server dir
+            workable_servers="$(python3 -c 'import sys, json; d=json.loads(sys.argv[1]); s=d.get("workable_servers",[]); print(" ".join(s) if isinstance(s, list) else "")' "$meta_json" 2>/dev/null || true)"
+            server="$(python3 -c 'import sys, json; print(json.loads(sys.argv[1]).get("server",""))' "$meta_json" 2>/dev/null || true)"
+            dir="$(python3 -c 'import sys, json; print(json.loads(sys.argv[1]).get("dir",""))' "$meta_json" 2>/dev/null || true)"
+            
+            local candidates=()
+            for s in $workable_servers; do [ -n "$s" ] && candidates+=("$s"); done
+            [ -n "$server" ] && candidates+=("$server")
+
+            for srv in "${candidates[@]}"; do
+                local direct_url="https://$srv${dir:-/items/$item_id}/$item_file"
+                echo "Trying direct storage mirror: $direct_url"
+                if wget "${WGET_OPTS[@]}" "$direct_url" -O "$dest_dir/$filename"; then
+                    extract_archive_once "$dest_dir/$filename" "$dest_dir"
+                    return 0
+                fi
+            done
+        fi
+    fi
+
+    echo "Download interrupted for $platform. Run again to continue."
 }
 
 download_archive_item() {

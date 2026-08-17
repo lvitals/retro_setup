@@ -52,10 +52,10 @@ touch "$TEST_ROMS/ps1/Castlevania - Symphony of the Night.chd"
 echo "[TEST 1] Checking platforms.config and retro_url.config..."
 grep -q "^\[ps2\]" "$REPO_DIR/platforms.config" || { echo "FAIL: ps2 section missing in platforms.config"; exit 1; }
 grep -q "core_file = pcsx2_libretro.so" "$REPO_DIR/platforms.config" || { echo "FAIL: ps2 core missing in platforms.config"; exit 1; }
-grep -q "fallback_core_file = play_libretro.so" "$REPO_DIR/platforms.config" || { echo "FAIL: BIOS-less PS2 fallback core missing"; exit 1; }
+! grep -q "fallback_core_file = play_libretro.so" "$REPO_DIR/platforms.config" || { echo "FAIL: Play! must not be configured as the PS2 fallback"; exit 1; }
 grep -q "extensions = elf, iso, ciso, chd, cso, bin, mdf, nrg, dump, gz, img, m3u" "$REPO_DIR/platforms.config" || { echo "FAIL: ps2 extensions missing in platforms.config"; exit 1; }
 grep -q "bios_files = pcsx2/bios" "$REPO_DIR/platforms.config" || { echo "FAIL: ps2 bios directory missing in platforms.config"; exit 1; }
-grep -q "bios_missing_action = warn" "$REPO_DIR/platforms.config" || { echo "FAIL: user-provided PS2 BIOS must not block asset installation"; exit 1; }
+grep -q "bios_missing_action = error" "$REPO_DIR/platforms.config" || { echo "FAIL: LRPS2 must require a valid user-provided PS2 BIOS"; exit 1; }
 grep -q "^\[ps2\]" "$REPO_DIR/retro_url.config" || { echo "FAIL: ps2 section missing in retro_url.config"; exit 1; }
 awk '/^\[ps2\]/{in_ps2=1; next} /^\[/{in_ps2=0} in_ps2 && /^rom_catalog_url = https:\/\/archive.org\/metadata\//{found=1} END{exit !found}' \
     "$REPO_DIR/retro_url.config" || { echo "FAIL: PS2 individual-game catalog missing"; exit 1; }
@@ -110,7 +110,8 @@ grep -q "Shadow of the Colossus.iso" "$PS2_LPL" || { echo "FAIL: ISO game missin
 grep -q "Gran Turismo 4.chd" "$PS2_LPL" || { echo "FAIL: CHD game missing from playlist"; exit 1; }
 grep -q "God of War II.cso" "$PS2_LPL" || { echo "FAIL: CSO game missing from playlist"; exit 1; }
 grep -q "Final Fantasy X.bin" "$PS2_LPL" || { echo "FAIL: BIN game missing from playlist"; exit 1; }
-grep -q "play_libretro.so" "$PS2_LPL" || { echo "FAIL: BIOS-less PS2 fallback core was not used in playlist"; exit 1; }
+grep -q "pcsx2_libretro.so" "$PS2_LPL" || { echo "FAIL: LRPS2 core was not used in playlist"; exit 1; }
+! grep -q "play_libretro.so" "$PS2_LPL" || { echo "FAIL: Play! is still present in the PS2 playlist"; exit 1; }
 
 # Verify other playlists (non-regression)
 test -f "$TEST_STANDALONE_RA/playlists/Nintendo - Nintendo Entertainment System.lpl" || { echo "FAIL: NES playlist missing"; exit 1; }

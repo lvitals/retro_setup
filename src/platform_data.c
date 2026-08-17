@@ -161,7 +161,6 @@ void platform_data_load_custom(const char* config_path) {
             if (end_bracket) {
                 *end_bracket = 0;
                 snprintf(current_section_id, sizeof(current_section_id), "%.63s", p + 1);
-                add_or_update_platform(current_section_id, NULL, NULL, NULL, NULL, NULL, NULL, 0);
                 continue;
             }
         }
