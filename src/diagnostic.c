@@ -167,12 +167,14 @@ void diagnostic_run_scan(SystemDiagnosticReport* report) {
         report->platforms_selected++;
 
         // Core check
-        char core_path[MAX_PATH_LEN];
-        snprintf(core_path, sizeof(core_path), "%.1000s/%.128s", cores_dir, g_platforms[i].core_file);
-        pd->core_installed = fs_exists(core_path);
+        char resolved_core_file[128], resolved_core_name[128], resolved_core_path[MAX_PATH_LEN];
+        pd->core_installed = platform_resolve_core(&g_platforms[i], g_config.ra_dir,
+                                                   resolved_core_file, sizeof(resolved_core_file),
+                                                   resolved_core_name, sizeof(resolved_core_name),
+                                                   resolved_core_path, sizeof(resolved_core_path));
 
         char info_name[256];
-        snprintf(info_name, sizeof(info_name), "%.250s", g_platforms[i].core_file);
+        snprintf(info_name, sizeof(info_name), "%.250s", resolved_core_file);
         char* dot_so = strstr(info_name, ".so");
         if (dot_so) snprintf(dot_so, 6, ".info");
         char info_path[MAX_PATH_LEN];
@@ -189,8 +191,23 @@ void diagnostic_run_scan(SystemDiagnosticReport* report) {
             while (token) {
                 pd->bios_required_count++;
                 char bpath[MAX_PATH_LEN];
-                snprintf(bpath, sizeof(bpath), "%.1000s/%.256s", sys_dir, token);
+                fs_join_path(bpath, sizeof(bpath), sys_dir, token);
+
+                bool token_found = false;
                 if (fs_exists(bpath)) {
+                    token_found = platform_bios_path_valid(&g_platforms[i], bpath);
+                } else {
+                    const char* slash = strrchr(token, '/');
+                    char bname[MAX_PATH_LEN];
+                    snprintf(bname, sizeof(bname), "%s", slash ? slash + 1 : token);
+                    char alt_path[MAX_PATH_LEN];
+                    fs_join_path(alt_path, sizeof(alt_path), sys_dir, bname);
+                    if (fs_exists(alt_path)) {
+                        token_found = platform_bios_path_valid(&g_platforms[i], alt_path);
+                    }
+                }
+
+                if (token_found) {
                     pd->bios_found_count++;
                     report->bios_found_total++;
                 } else {

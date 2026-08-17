@@ -23,12 +23,15 @@ static void ini_key(const char* section, const char* name, char* out, size_t out
         else if (strcmp(name, "database_rdb_url") == 0) snprintf(out, out_size, "DATABASE_RDB_URL");
         else if (strcmp(name, "database_cursors_url") == 0) snprintf(out, out_size, "DATABASE_CURSORS_URL");
         else if (strcmp(name, "thumbnails_base_url") == 0) snprintf(out, out_size, "THUMBNAILS_BASE_URL");
+        else if (strcmp(name, "archive_download_base_url") == 0) snprintf(out, out_size, "ARCHIVE_DOWNLOAD_BASE_URL");
         else out[0] = 0;
         return;
     }
     if (strcmp(name, "bios_url") == 0) snprintf(out, out_size, "BIOS_URLS_%s", section);
     else if (strcmp(name, "rom_url") == 0) snprintf(out, out_size, "ROM_URLS_%s", section);
     else if (strcmp(name, "rom_directory_url") == 0) snprintf(out, out_size, "ROM_DIR_URLS_%s", section);
+    else if (strcmp(name, "rom_catalog_url") == 0) snprintf(out, out_size, "ROM_CATALOG_URLS_%s", section);
+    else if (strcmp(name, "rom_catalog_include") == 0) snprintf(out, out_size, "ROM_CATALOG_INCLUDES_%s", section);
     else if (strcmp(name, "archive_item") == 0) snprintf(out, out_size, "ARCHIVE_COMPRESS_URLS_%s", section);
     else out[0] = 0;
 }
@@ -81,6 +84,23 @@ static void extract_urls_for_key(const char* key, const char* str) {
         }
         p = q;
     }
+}
+
+static void append_literal_for_key(const char* key, const char* value) {
+    if (!key || !key[0] || !value || !value[0]) return;
+    int entry_idx = -1;
+    for (int i = 0; i < g_entry_count; ++i) {
+        if (strcmp(g_entries[i].key, key) == 0) { entry_idx = i; break; }
+    }
+    if (entry_idx < 0) {
+        if (g_entry_count >= MAX_ENTRIES) return;
+        entry_idx = g_entry_count++;
+        snprintf(g_entries[entry_idx].key, sizeof(g_entries[entry_idx].key), "%s", key);
+    }
+    if (g_entries[entry_idx].url_count >= MAX_URLS_PER_KEY) return;
+    for (int i = 0; i < g_entries[entry_idx].url_count; ++i)
+        if (strcmp(g_entries[entry_idx].urls[i], value) == 0) return;
+    snprintf(g_entries[entry_idx].urls[g_entries[entry_idx].url_count++], MAX_URL_LEN, "%s", value);
 }
 
 bool url_config_load(const char* filepath) {
@@ -147,7 +167,12 @@ bool url_config_load(const char* filepath) {
                     val++;
                 }
                 ini_key(current_section, key, mapped_key, sizeof(mapped_key));
-                if (mapped_key[0] && val[0]) extract_urls_for_key(mapped_key, val);
+                if (mapped_key[0] && val[0]) {
+                    if (strncmp(mapped_key, "ROM_CATALOG_INCLUDES_", 21) == 0)
+                        append_literal_for_key(mapped_key, val);
+                    else
+                        extract_urls_for_key(mapped_key, val);
+                }
                 continue;
             }
 

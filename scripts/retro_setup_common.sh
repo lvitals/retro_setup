@@ -58,7 +58,7 @@ load_url_config() {
 
     local id
     for id in "${PLATFORM_IDS[@]}"; do
-        unset "BIOS_URLS_$id" "ROM_URLS_$id" "ROM_DIR_URLS_$id" "ARCHIVE_COMPRESS_URLS_$id"
+        unset "BIOS_URLS_$id" "ROM_URLS_$id" "ROM_DIR_URLS_$id" "ROM_CATALOG_URLS_$id" "ARCHIVE_COMPRESS_URLS_$id"
     done
 
     local section="" line key value variable
@@ -89,6 +89,7 @@ load_url_config() {
                 database_rdb_url) variable=DATABASE_RDB_URL ;;
                 database_cursors_url) variable=DATABASE_CURSORS_URL ;;
                 thumbnails_base_url) variable=THUMBNAILS_BASE_URL ;;
+                archive_download_base_url) variable=ARCHIVE_DOWNLOAD_BASE_URL ;;
                 *) continue ;;
             esac
             printf -v "$variable" '%s' "$value"
@@ -99,6 +100,7 @@ load_url_config() {
             bios_url) variable="BIOS_URLS_$section" ;;
             rom_url) variable="ROM_URLS_$section" ;;
             rom_directory_url) variable="ROM_DIR_URLS_$section" ;;
+            rom_catalog_url) variable="ROM_CATALOG_URLS_$section" ;;
             archive_item) variable="ARCHIVE_COMPRESS_URLS_$section" ;;
             *) continue ;;
         esac
@@ -269,6 +271,7 @@ create_rom_sources_file() {
         echo 'database_rdb_url = https://buildbot.libretro.com/assets/frontend/database-rdb.zip'
         echo 'database_cursors_url = https://buildbot.libretro.com/assets/frontend/database-cursors.zip'
         echo 'thumbnails_base_url = https://thumbnails.libretro.com'
+        echo 'archive_download_base_url = https://archive.org/download'
         echo
         local id
         for id in "${PLATFORM_IDS[@]}"; do
@@ -277,6 +280,7 @@ create_rom_sources_file() {
             echo '# bios_url = https://example.com/bios.zip'
             echo '# rom_url = https://example.com/rom-pack.zip'
             echo '# rom_directory_url = https://example.com/archive-directory/'
+            echo '# rom_catalog_url = https://archive.org/metadata/archive-item-id'
             echo
         done
     } > "$RETRO_URL_CONFIG"
@@ -285,12 +289,13 @@ create_rom_sources_file() {
 copy_selected_bios() {
     local src_dir="${1:-$SET_DIR/bios}"
     local dst_dir="${2:-$RA_DIR/system}"
-    local platform bios source found_path dest_path
+    local platform bios source found_path dest_path file relative min_size extensions file_ext
 
     mkdir -p "$src_dir" "$dst_dir"
 
     for platform in "${SELECTED_PLATFORMS[@]}"; do
         [ -n "${PLATFORM_BIOS[$platform]:-}" ] || continue
+
         for bios in ${PLATFORM_BIOS[$platform]}; do
             source="$src_dir/$bios"
             found_path=""
@@ -303,8 +308,32 @@ copy_selected_bios() {
 
             if [ -n "$found_path" ]; then
                 dest_path="$dst_dir/$bios"
-                mkdir -p "$(dirname "$dest_path")"
-                cp -f "$found_path" "$dest_path"
+                if [ -d "$found_path" ]; then
+                    mkdir -p "$dest_path"
+                    min_size=0
+                    extensions="${PLATFORM_BIOS_COPY_EXTENSIONS[$platform]:-${PLATFORM_BIOS_EXTENSIONS[$platform]:-}}"
+                    if [ -n "$extensions" ] || [ "$min_size" -gt 0 ]; then
+                        while IFS= read -r -d '' file; do
+                            [ "$(stat -c %s "$file" 2>/dev/null || echo 0)" -ge "$min_size" ] || continue
+                            if [ -n "$extensions" ]; then
+                                file_ext="${file##*.}"
+                                file_ext="${file_ext,,}"
+                                case " $extensions " in
+                                    *" $file_ext "*) ;;
+                                    *) continue ;;
+                                esac
+                            fi
+                            relative="${file#"$found_path"/}"
+                            mkdir -p "$dest_path/$(dirname "$relative")"
+                            cp -f "$file" "$dest_path/$relative"
+                        done < <(find "$found_path" -type f -print0 2>/dev/null)
+                    else
+                        cp -a "$found_path/." "$dest_path/"
+                    fi
+                else
+                    mkdir -p "$(dirname "$dest_path")"
+                    cp -f "$found_path" "$dest_path"
+                fi
                 echo "BIOS synced: $platform -> $bios"
             fi
         done
@@ -314,17 +343,34 @@ copy_selected_bios() {
 check_selected_bios() {
     local dst_dir="${1:-$RA_DIR/system}"
     local missing=false
-    local platform bios
+    local platform bios file valid min_size extensions size file_ext
 
     for platform in "${SELECTED_PLATFORMS[@]}"; do
         [ -n "${PLATFORM_BIOS[$platform]:-}" ] || continue
 
         echo "$platform - ${PLATFORM_NAME[$platform]}"
         for bios in ${PLATFORM_BIOS[$platform]}; do
-            if [ -e "$dst_dir/$bios" ] || find "$dst_dir" -name "$(basename "$bios")" -print -quit 2>/dev/null | grep -q .; then
+            min_size="${PLATFORM_BIOS_MIN_SIZE[$platform]:-1}"
+            extensions="${PLATFORM_BIOS_EXTENSIONS[$platform]:-}"
+            valid=false
+            while IFS= read -r -d '' file; do
+                size="$(stat -c %s "$file" 2>/dev/null || echo 0)"
+                [ "$size" -ge "$min_size" ] || continue
+                if [ -n "$extensions" ]; then
+                    file_ext="${file##*.}"
+                    file_ext="${file_ext,,}"
+                    case " $extensions " in
+                        *" $file_ext "*) ;;
+                        *) continue ;;
+                    esac
+                fi
+                valid=true
+                break
+            done < <(if [ -d "$dst_dir/$bios" ]; then find "$dst_dir/$bios" -type f -print0 2>/dev/null; elif [ -f "$dst_dir/$bios" ]; then printf '%s\0' "$dst_dir/$bios"; fi)
+            if [ "$valid" = true ]; then
                 echo "  ok: $bios"
             else
-                echo "  missing: $bios"
+                echo "  missing or invalid: $bios${extensions:+ (.$extensions, at least $min_size bytes)}"
                 missing=true
             fi
         done
@@ -338,10 +384,10 @@ download_selected_core_assets() {
 
     local arch base_url core_file core_name platform core_zip info_file
     if ! command -v wget >/dev/null 2>&1; then
-        install_tool_package wget wget wget wget wget wget
+        echo "Note: wget is recommended for core downloads."
     fi
     if ! command -v unzip >/dev/null 2>&1; then
-        install_tool_package unzip unzip unzip unzip unzip unzip
+        echo "Note: unzip is required to extract downloaded cores."
     fi
 
     arch="$(detect_libretro_arch)"
@@ -364,10 +410,15 @@ download_selected_core_assets() {
         echo "Downloading core info..."
         local info_zip="$SET_DIR/info/retroarch-core-info.zip"
         [ -s "$info_zip" ] || rm -f "$info_zip"
-        wget --continue --tries=10 --waitretry=5 --retry-connrefused \
-            "${CORE_INFO_URL:-https://buildbot.libretro.com/assets/frontend/info.zip}" \
-            -O "$info_zip" --show-progress &&
-            unzip -o "$info_zip" -d "$SET_DIR/info"
+        if command -v wget >/dev/null 2>&1; then
+            wget --continue --tries=10 --waitretry=5 --retry-connrefused \
+                "${CORE_INFO_URL:-https://buildbot.libretro.com/assets/frontend/info.zip}" \
+                -O "$info_zip" --show-progress &&
+                unzip -o "$info_zip" -d "$SET_DIR/info"
+        elif command -v curl >/dev/null 2>&1; then
+            curl -L -f -o "$info_zip" "${CORE_INFO_URL:-https://buildbot.libretro.com/assets/frontend/info.zip}" &&
+                unzip -o "$info_zip" -d "$SET_DIR/info"
+        fi
     fi
 
     for platform in "${SELECTED_PLATFORMS[@]}"; do
@@ -379,11 +430,17 @@ download_selected_core_assets() {
 
         core_zip="$SET_DIR/cores/$core_file.zip"
         echo "Downloading core $platform: $core_file ($core_name)"
-        if wget --continue --tries=10 --waitretry=5 --retry-connrefused \
-            "$base_url/$core_file.zip" \
-            -O "$core_zip" --show-progress; then
-            unzip -o "$core_zip" -d "$SET_DIR/cores"
-        else
+        local dl_success=false
+        if command -v wget >/dev/null 2>&1; then
+            if wget --continue --tries=10 --waitretry=5 --retry-connrefused \
+                "$base_url/$core_file.zip" \
+                -O "$core_zip" --show-progress; then
+                unzip -o "$core_zip" -d "$SET_DIR/cores"
+                dl_success=true
+            fi
+        fi
+
+        if [ "$dl_success" = false ]; then
             echo "WARNING: failed to download core $core_file"
         fi
     done

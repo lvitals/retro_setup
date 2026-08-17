@@ -75,7 +75,7 @@ generate_playlist() {
 
     {
         printf '{\n'
-        printf '  "version": "1.5",\n'
+        printf '  "version": "1.5\",\n'
         printf '  "default_core_path": "%s",\n' "$(json_escape "$core_path")"
         printf '  "default_core_name": "%s",\n' "$(json_escape "$core_name")"
         printf '  "label_display_mode": 0,\n'

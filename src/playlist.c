@@ -1,4 +1,6 @@
 #include "playlist.h"
+#include "config.h"
+#include "steam_shortcuts.h"
 #include "fs.h"
 #include "log.h"
 #include <stdio.h>
@@ -30,7 +32,7 @@ static bool msgpack_string(const unsigned char* data, size_t size, size_t pos,
 
 static void load_arcade_names(const char* ra_dir, const char* core_file, ArcadeNames* names) {
     memset(names, 0, sizeof(*names));
-    char prefix[128]; snprintf(prefix, sizeof(prefix), "%s", core_file);
+    char prefix[MAX_PATH_LEN]; snprintf(prefix, sizeof(prefix), "%s", core_file);
     char* cut = strchr(prefix, '_'); if (cut) *cut = 0;
     for (char* p = prefix; *p; ++p) *p = (char)tolower((unsigned char)*p);
     char rdb_dir[4096]; snprintf(rdb_dir, sizeof(rdb_dir), "%s/database/rdb", ra_dir);
@@ -207,12 +209,9 @@ bool playlist_generate_for_platform(const PlatformInfo* platform, const char* ra
         return false;
     }
 
-    char core_file[256], core_name[256];
-    snprintf(core_file, sizeof(core_file), "%s", platform->core_file);
-    snprintf(core_name, sizeof(core_name), "%s", platform->core_name);
-
-    char core_path[4096];
-    snprintf(core_path, sizeof(core_path), "%.2000s/cores/%.250s", ra_dir, core_file);
+    char core_file[128], core_name[128], core_path[MAX_PATH_LEN];
+    platform_resolve_core(platform, ra_dir, core_file, sizeof(core_file),
+                          core_name, sizeof(core_name), core_path, sizeof(core_path));
 
     DIR* d = opendir(rom_dir);
     if (!d) return false;
@@ -239,7 +238,7 @@ bool playlist_generate_for_platform(const PlatformInfo* platform, const char* ra
     fprintf(f, "  \"items\": [\n");
 
     PlaylistWriter writer = {f, platform, esc_playlist_name, esc_core_path, esc_core_name, true, 0, {0}};
-    load_arcade_names(ra_dir, platform->core_file, &writer.arcade_names);
+    load_arcade_names(ra_dir, core_file, &writer.arcade_names);
     playlist_add_directory(&writer, rom_dir);
     free(writer.arcade_names.items);
 
@@ -260,5 +259,11 @@ int playlist_generate_selected(const char* ra_dir, const char* rom_base_dir) {
             }
         }
     }
+
+    // In Steam mode, also synchronize non-Steam game shortcuts in Steam's library
+    if (g_config.mode == MODE_STEAM) {
+        steam_shortcuts_sync(ra_dir, rom_base_dir);
+    }
+
     return total;
 }

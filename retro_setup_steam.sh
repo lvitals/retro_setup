@@ -6,6 +6,33 @@ SCRIPT_DIR="$SET_DIR/scripts"
 
 export RETRO_SETUP_MODE="steam"
 
+command="${1:-}"
+
+usage() {
+    cat <<EOF
+Usage: $0 [command]
+
+Commands:
+  --prepare   prepare Steam RetroArch once
+  --select    select platforms and install everything they need for Steam RetroArch
+  --install   continue/re-run installation for saved platforms
+  --uninstall select platforms to remove what was installed for them
+  --thumbnails download only thumbnails matching installed ROM names
+  --implode   remove retro_setup configuration from Steam RetroArch
+  --status    show platforms and configuration files
+  --help      show this help
+
+Set STEAM_RA_DIR when RetroArch is installed outside Steam's standard paths.
+EOF
+}
+
+case "$command" in
+    --help|-h|"")
+        usage
+        exit 0
+        ;;
+esac
+
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/retro_setup_common.sh"
 
@@ -22,28 +49,6 @@ fi
 
 export RA_DIR="$STEAM_RA_DIR"
 export RETRO_SETUP_CONFIG="${RETRO_SETUP_CONFIG:-$RETRO_SETUP_CONFIG_DIR/retro_setup_steam.conf}"
-
-usage() {
-    cat <<EOF
-Usage: $0 [command]
-
-Steam RetroArch directory: $RA_DIR
-
-Commands:
-  --prepare   prepare Steam RetroArch once
-  --select    select platforms and install everything they need for Steam RetroArch
-  --install   continue/re-run installation for saved platforms
-  --uninstall select platforms to remove what was installed for them
-  --thumbnails download only thumbnails matching installed ROM names
-  --implode   remove retro_setup configuration from Steam RetroArch
-  --status    show platforms and configuration files
-  --help      show this help
-
-Files:
-  Platforms: $RETRO_SETUP_CONFIG
-  URLs:      $RETRO_URL_CONFIG
-EOF
-}
 
 install_selected_platforms() {
     selected_platforms_or_all
@@ -62,7 +67,7 @@ status() {
     echo "URLs: $RETRO_URL_CONFIG"
 }
 
-case "${1:-}" in
+case "$command" in
     --prepare)
         "$SCRIPT_DIR/prepare_retroarch.sh"
         ;;
@@ -86,9 +91,6 @@ case "${1:-}" in
         ;;
     --status)
         status
-        ;;
-    --help|-h|"")
-        usage
         ;;
     *)
         usage

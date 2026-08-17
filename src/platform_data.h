@@ -2,6 +2,7 @@
 #define PLATFORM_DATA_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #define MAX_CATEGORIES 32
 
@@ -21,6 +22,9 @@ typedef struct {
     char core_name[128];
     char extensions[128];
     char bios_files[256];
+    char bios_extensions[128];
+    long long bios_min_size;
+    char bios_missing_action[16];
     unsigned int color_hex;
     bool selected;
 } PlatformInfo;
@@ -38,5 +42,7 @@ void platform_data_build_categories(void);
 int get_platform_index_by_id(const char* id);
 void reset_all_selections(bool select_state);
 void select_by_category(const char* category_name, bool select_state);
+bool platform_resolve_core(const PlatformInfo* p, const char* ra_dir, char* out_file, size_t file_size, char* out_name, size_t name_size, char* out_path, size_t path_size);
+bool platform_bios_path_valid(const PlatformInfo* p, const char* path);
 
 #endif // PLATFORM_DATA_H

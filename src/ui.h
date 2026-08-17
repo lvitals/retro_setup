@@ -6,6 +6,7 @@
 #include "platform_data.h"
 #include "config.h"
 #include "tasks.h"
+#include "rom_catalog.h"
 
 #include "diagnostic.h"
 
@@ -13,6 +14,8 @@ typedef enum {
     VIEW_MAIN_MENU = 0,
     VIEW_PLATFORM_SELECT,
     VIEW_UNINSTALL_SELECT,
+    VIEW_CATALOG_LOADING,
+    VIEW_GAME_SELECT,
     VIEW_TASK_RUNNING,
     VIEW_STATUS,
     VIEW_PARALLEL_PROMPT
@@ -37,6 +40,13 @@ typedef struct {
     int scroll_offset;
     int filtered_indices[MAX_PLATFORMS];
     int filtered_count;
+    int selected_game_index;
+    int game_scroll_offset;
+    int game_filtered_indices[ROM_CATALOG_MAX_GAMES];
+    int game_filtered_count;
+    char game_search_filter[128];
+    int game_search_len;
+    bool game_search_active;
 
     int status_scroll_y;
     int task_log_scroll_lines;

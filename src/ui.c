@@ -4,12 +4,29 @@
 #include "theme.h"
 #include "tasks.h"
 #include "log.h"
+#include "rom_catalog.h"
+#include "fs.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
 UIManager g_ui;
+static SDL_atomic_t g_catalog_load_state;
+static char g_catalog_selection_file[MAX_PATH_LEN];
+
+static void ui_update_filtered_games(void) {
+    g_ui.game_filtered_count = 0;
+    for (int i = 0; i < rom_catalog_count(); ++i) {
+        RomCatalogGame* game = rom_catalog_get(i);
+        if (!game) continue;
+        if (g_ui.game_search_filter[0] && !strcasestr(game->name, g_ui.game_search_filter)) continue;
+        g_ui.game_filtered_indices[g_ui.game_filtered_count++] = i;
+    }
+    if (g_ui.selected_game_index >= g_ui.game_filtered_count)
+        g_ui.selected_game_index = g_ui.game_filtered_count > 0 ? g_ui.game_filtered_count - 1 : 0;
+    if (g_ui.game_scroll_offset >= g_ui.game_filtered_count) g_ui.game_scroll_offset = 0;
+}
 
 // Main menu options with clean operational descriptions
 typedef struct {
@@ -511,6 +528,124 @@ static void draw_platform_selector(void) {
                                  COLOR_TEXT_SECONDARY.r, COLOR_TEXT_SECONDARY.g, COLOR_TEXT_SECONDARY.b, 255);
     }
 
+    draw_footer_bar();
+}
+
+static void format_transfer_size(curl_off_t bytes, char* out, size_t out_size);
+
+static void draw_game_selector(void) {
+    draw_background();
+    draw_header_bar();
+    int mx, my;
+    SDL_GetMouseState(&mx, &my);
+    int y = HEADER_HEIGHT + 18;
+    font_draw_text_shadow(g_ui.renderer, MARGIN_CONTAINER, y, "SELECT INDIVIDUAL GAMES", FONT_SCALE_TITLE,
+                          COLOR_PRIMARY.r, COLOR_PRIMARY.g, COLOR_PRIMARY.b, 255);
+    y += 36;
+    int selected = 0;
+    for (int i = 0; i < rom_catalog_count(); ++i) {
+        RomCatalogGame* game = rom_catalog_get(i);
+        if (game && game->selected) selected++;
+    }
+    char summary[160];
+    snprintf(summary, sizeof(summary), "%d shown / %d available | %d selected",
+             g_ui.game_filtered_count, rom_catalog_count(), selected);
+    font_draw_text_shadow(g_ui.renderer, MARGIN_CONTAINER, y, summary, FONT_SCALE_BODY,
+                          COLOR_TEXT_SECONDARY.r, COLOR_TEXT_SECONDARY.g, COLOR_TEXT_SECONDARY.b, 255);
+    y += 24;
+
+    const int search_width = 430;
+    SDL_Rect search_rect = { MARGIN_CONTAINER, y, search_width, BUTTON_HEIGHT };
+    theme_draw_filled_rect(g_ui.renderer, search_rect.x, search_rect.y, search_rect.w, search_rect.h, COLOR_SURFACE);
+    theme_draw_border_rect(g_ui.renderer, search_rect.x, search_rect.y, search_rect.w, search_rect.h,
+                           g_ui.game_search_active ? 2 : 1,
+                           g_ui.game_search_active ? COLOR_BORDER_FOCUS : COLOR_BORDER_DEFAULT);
+    char search_text[180];
+    snprintf(search_text, sizeof(search_text), "[/] SEARCH: %s%s", g_ui.game_search_filter,
+             g_ui.game_search_active ? "_" : "");
+    font_draw_text_truncated(g_ui.renderer, search_rect.x + 10, search_rect.y + 9, search_text,
+                             FONT_SCALE_BODY, search_rect.w - 20,
+                             COLOR_TEXT_PRIMARY.r, COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
+
+    int button_x = search_rect.x + search_rect.w + 12;
+    const struct { const char* shortcut; const char* label; ThemeColor color; } actions[] = {
+        { "[A]", "ALL SHOWN", COLOR_SECONDARY },
+        { "[C]", "CLEAR SHOWN", COLOR_BG_PANEL },
+        { "[ENTER]", "SAVE & INSTALL", COLOR_SUCCESS }
+    };
+    for (size_t i = 0; i < sizeof(actions) / sizeof(actions[0]); ++i) {
+        UIButton button;
+        memset(&button, 0, sizeof(button));
+        button.shortcut = actions[i].shortcut;
+        button.label = actions[i].label;
+        button.scale = FONT_SCALE_BODY;
+        button.bg_color = actions[i].color;
+        ui_button_measure(&button, 0, BUTTON_HEIGHT);
+        button.rect.x = button_x;
+        button.rect.y = y;
+        button.hovered = ui_button_hit_test(&button, mx, my);
+        ui_button_draw(g_ui.renderer, &button);
+        button_x += button.rect.w + 8;
+    }
+    y += BUTTON_HEIGHT + 10;
+
+    int visible = (g_ui.window_height - y - FOOTER_HEIGHT - 6) / PLATFORM_ITEM_HEIGHT;
+    if (visible < 1) visible = 1;
+    if (g_ui.selected_game_index < g_ui.game_scroll_offset) g_ui.game_scroll_offset = g_ui.selected_game_index;
+    if (g_ui.selected_game_index >= g_ui.game_scroll_offset + visible)
+        g_ui.game_scroll_offset = g_ui.selected_game_index - visible + 1;
+
+    for (int row = 0; row < visible; ++row) {
+        int filtered_index = g_ui.game_scroll_offset + row;
+        if (filtered_index >= g_ui.game_filtered_count) break;
+        int catalog_index = g_ui.game_filtered_indices[filtered_index];
+        RomCatalogGame* game = rom_catalog_get(catalog_index);
+        if (!game) break;
+        SDL_Rect rect = { MARGIN_CONTAINER, y + row * PLATFORM_ITEM_HEIGHT,
+                          g_ui.window_width - 2 * MARGIN_CONTAINER, PLATFORM_ITEM_HEIGHT - 4 };
+        bool active = filtered_index == g_ui.selected_game_index || is_point_in_rect(mx, my, rect);
+        theme_draw_gradient_panel(g_ui.renderer, rect.x, rect.y, rect.w, rect.h,
+                                  active ? COLOR_SURFACE_SELECTED : COLOR_BG_PANEL, COLOR_SURFACE);
+        theme_draw_border_rect(g_ui.renderer, rect.x, rect.y, rect.w, rect.h, active ? 2 : 1,
+                               active ? COLOR_BORDER_FOCUS : COLOR_BORDER_DEFAULT);
+        ThemeColor check = game->selected ? COLOR_SUCCESS : COLOR_TEXT_MUTED;
+        font_draw_text_shadow(g_ui.renderer, rect.x + 10, rect.y + 10, game->selected ? "[X]" : "[ ]",
+                              FONT_SCALE_BODY, check.r, check.g, check.b, 255);
+        char size_text[32];
+        format_transfer_size((curl_off_t)game->size, size_text, sizeof(size_text));
+        font_draw_text_shadow_truncated(g_ui.renderer, rect.x + 62, rect.y + 10, game->name,
+                                        FONT_SCALE_BODY, rect.w - 210,
+                                        COLOR_TEXT_PRIMARY.r, COLOR_TEXT_PRIMARY.g, COLOR_TEXT_PRIMARY.b, 255);
+        font_draw_text_shadow(g_ui.renderer, rect.x + rect.w - 130, rect.y + 10, size_text, FONT_SCALE_BODY,
+                              COLOR_TEXT_SECONDARY.r, COLOR_TEXT_SECONDARY.g, COLOR_TEXT_SECONDARY.b, 255);
+    }
+    draw_footer_bar();
+}
+
+static void draw_catalog_loading(void) {
+    draw_background();
+    draw_header_bar();
+    int panel_width = g_ui.window_width - 2 * MARGIN_CONTAINER;
+    int panel_height = 180;
+    int panel_y = (g_ui.window_height - panel_height) / 2;
+    theme_draw_gradient_panel(g_ui.renderer, MARGIN_CONTAINER, panel_y, panel_width, panel_height,
+                              COLOR_BG_PANEL, COLOR_SURFACE);
+    theme_draw_border_rect(g_ui.renderer, MARGIN_CONTAINER, panel_y, panel_width, panel_height, 2, COLOR_PRIMARY);
+    font_draw_text_shadow(g_ui.renderer, MARGIN_CONTAINER + 24, panel_y + 28,
+                          "LOADING GAME CATALOGS", FONT_SCALE_TITLE,
+                          COLOR_PRIMARY.r, COLOR_PRIMARY.g, COLOR_PRIMARY.b, 255);
+    font_draw_text_shadow(g_ui.renderer, MARGIN_CONTAINER + 24, panel_y + 76,
+                          "Reading cached metadata and updating game catalogs...",
+                          FONT_SCALE_BODY, COLOR_TEXT_SECONDARY.r, COLOR_TEXT_SECONDARY.g,
+                          COLOR_TEXT_SECONDARY.b, 255);
+    int track_x = MARGIN_CONTAINER + 24;
+    int track_y = panel_y + 120;
+    int track_w = panel_width - 48;
+    theme_draw_filled_rect(g_ui.renderer, track_x, track_y, track_w, 14, COLOR_SURFACE_SELECTED);
+    int marker_w = track_w / 5;
+    int travel = track_w - marker_w;
+    int marker_x = track_x + (int)(fabs(sin(g_ui.anim_timer * 2.0f)) * travel);
+    theme_draw_filled_rect(g_ui.renderer, marker_x, track_y, marker_w, 14, COLOR_PRIMARY);
     draw_footer_bar();
 }
 
@@ -1169,6 +1304,65 @@ static void draw_system_status_view(void) {
     #undef DRAW_SECTION
 }
 
+static int SDLCALL catalog_load_thread(void* unused) {
+    (void)unused;
+    rom_catalog_refresh(g_config.url_config_file, g_catalog_selection_file);
+    SDL_AtomicSet(&g_catalog_load_state, 2);
+    return 0;
+}
+
+static void finish_catalog_loading(void) {
+    if (g_ui.view != VIEW_CATALOG_LOADING || SDL_AtomicGet(&g_catalog_load_state) != 2) return;
+    log_add(LOG_LEVEL_INFO, "Loaded %d selectable catalog games.", rom_catalog_count());
+    g_ui.selected_game_index = 0;
+    g_ui.game_scroll_offset = 0;
+    g_ui.game_search_filter[0] = 0;
+    g_ui.game_search_len = 0;
+    g_ui.game_search_active = false;
+    ui_update_filtered_games();
+    SDL_AtomicSet(&g_catalog_load_state, 0);
+    if (rom_catalog_count_for_selected_platforms() > 0) g_ui.view = VIEW_GAME_SELECT;
+    else if (get_selected_count() > 1) g_ui.view = VIEW_PARALLEL_PROMPT;
+    else {
+        g_config.use_parallel_downloads = false;
+        g_ui.view = VIEW_TASK_RUNNING;
+        g_ui.modal_task = TASK_INSTALL;
+        task_start_async(TASK_INSTALL, NULL);
+    }
+}
+
+static void start_install_or_game_selection(void) {
+    save_selected_platforms_config();
+    fs_join_path(g_catalog_selection_file, sizeof(g_catalog_selection_file),
+                 g_config.config_dir, "selected_roms.conf");
+    log_add(LOG_LEVEL_INFO, "Loading individual-game catalogs for selected platforms...");
+    g_ui.view = VIEW_CATALOG_LOADING;
+    SDL_AtomicSet(&g_catalog_load_state, 1);
+    SDL_Thread* thread = SDL_CreateThread(catalog_load_thread, "CatalogLoader", NULL);
+    if (thread) SDL_DetachThread(thread);
+    else {
+        log_add(LOG_LEVEL_ERROR, "Could not start game catalog loader thread.");
+        SDL_AtomicSet(&g_catalog_load_state, 2);
+    }
+}
+
+static void save_games_and_start_install(void) {
+    char selection_file[MAX_PATH_LEN];
+    fs_join_path(selection_file, sizeof(selection_file), g_config.config_dir, "selected_roms.conf");
+    rom_catalog_save_selection(selection_file);
+    if (get_selected_count() > 1) g_ui.view = VIEW_PARALLEL_PROMPT;
+    else {
+        g_config.use_parallel_downloads = false;
+        g_ui.view = VIEW_TASK_RUNNING;
+        g_ui.modal_task = TASK_INSTALL;
+        task_start_async(TASK_INSTALL, NULL);
+    }
+}
+
+static void save_game_selection(void) {
+    if (g_catalog_selection_file[0]) rom_catalog_save_selection(g_catalog_selection_file);
+}
+
 static void handle_events(void) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
@@ -1186,6 +1380,12 @@ static void handle_events(void) {
             } else if (g_ui.view == VIEW_TASK_RUNNING) {
                 g_ui.task_log_scroll_lines += e.wheel.y * 3;
                 if (g_ui.task_log_scroll_lines < 0) g_ui.task_log_scroll_lines = 0;
+            } else if (g_ui.view == VIEW_GAME_SELECT) {
+                g_ui.game_scroll_offset -= e.wheel.y * 3;
+                if (g_ui.game_scroll_offset < 0) g_ui.game_scroll_offset = 0;
+                if (g_ui.game_scroll_offset >= g_ui.game_filtered_count)
+                    g_ui.game_scroll_offset = g_ui.game_filtered_count > 0 ? g_ui.game_filtered_count - 1 : 0;
+                g_ui.selected_game_index = g_ui.game_scroll_offset;
             }
         } else if (e.type == SDL_KEYDOWN) {
             SDL_Keycode key = e.key.keysym.sym;
@@ -1195,7 +1395,7 @@ static void handle_events(void) {
                 continue;
             }
 
-            if (key == SDLK_m) {
+            if (key == SDLK_m && g_ui.view != VIEW_CATALOG_LOADING) {
                 audio_play_sound(SOUND_TOGGLE);
                 set_setup_mode(g_config.mode == MODE_STEAM ? MODE_STANDALONE : MODE_STEAM);
                 load_selected_platforms_config();
@@ -1271,6 +1471,53 @@ static void handle_events(void) {
                         task_cancel();
                         audio_play_sound(SOUND_BACK);
                     }
+                }
+                continue;
+            }
+
+            if (g_ui.view == VIEW_GAME_SELECT) {
+                int count = g_ui.game_filtered_count;
+                int visible = (g_ui.window_height - HEADER_HEIGHT - 130 - FOOTER_HEIGHT) / PLATFORM_ITEM_HEIGHT;
+                if (visible < 1) visible = 1;
+                if (key == SDLK_UP && count > 0) {
+                    g_ui.selected_game_index = (g_ui.selected_game_index - 1 + count) % count;
+                } else if (key == SDLK_DOWN && count > 0) {
+                    g_ui.selected_game_index = (g_ui.selected_game_index + 1) % count;
+                } else if (key == SDLK_PAGEUP && count > 0) {
+                    g_ui.selected_game_index -= visible;
+                    if (g_ui.selected_game_index < 0) g_ui.selected_game_index = 0;
+                } else if (key == SDLK_PAGEDOWN && count > 0) {
+                    g_ui.selected_game_index += visible;
+                    if (g_ui.selected_game_index >= count) g_ui.selected_game_index = count - 1;
+                } else if (key == SDLK_SPACE && count > 0) {
+                    RomCatalogGame* game = rom_catalog_get(g_ui.game_filtered_indices[g_ui.selected_game_index]);
+                    if (game) {
+                        game->selected = !game->selected;
+                        save_game_selection();
+                    }
+                } else if (key == SDLK_a && !g_ui.game_search_active) {
+                    for (int i = 0; i < count; ++i)
+                        rom_catalog_get(g_ui.game_filtered_indices[i])->selected = true;
+                    save_game_selection();
+                } else if (key == SDLK_c && !g_ui.game_search_active) {
+                    for (int i = 0; i < count; ++i)
+                        rom_catalog_get(g_ui.game_filtered_indices[i])->selected = false;
+                    save_game_selection();
+                } else if (key == SDLK_SLASH || (key == SDLK_f && (e.key.keysym.mod & KMOD_CTRL))) {
+                    g_ui.game_search_active = true;
+                } else if (key == SDLK_RETURN) {
+                    if (g_ui.game_search_active) g_ui.game_search_active = false;
+                    else save_games_and_start_install();
+                } else if (key == SDLK_BACKSPACE && g_ui.game_search_len > 0) {
+                    g_ui.game_search_filter[--g_ui.game_search_len] = 0;
+                    ui_update_filtered_games();
+                } else if (key == SDLK_ESCAPE) {
+                    if (g_ui.game_search_active || g_ui.game_search_len > 0) {
+                        g_ui.game_search_active = false;
+                        g_ui.game_search_filter[0] = 0;
+                        g_ui.game_search_len = 0;
+                        ui_update_filtered_games();
+                    } else g_ui.view = VIEW_PLATFORM_SELECT;
                 }
                 continue;
             }
@@ -1369,14 +1616,8 @@ static void handle_events(void) {
                         g_ui.modal_task = TASK_UNINSTALL;
                         task_start_async(TASK_UNINSTALL, NULL);
                         audio_play_sound(SOUND_SELECT);
-                    } else if (get_selected_count() > 1) {
-                        g_ui.view = VIEW_PARALLEL_PROMPT;
-                        audio_play_sound(SOUND_SELECT);
                     } else {
-                        g_config.use_parallel_downloads = false;
-                        g_ui.view = VIEW_TASK_RUNNING;
-                        g_ui.modal_task = TASK_INSTALL;
-                        task_start_async(TASK_INSTALL, NULL);
+                        start_install_or_game_selection();
                         audio_play_sound(SOUND_FANFARE);
                     }
                 } else if (key == SDLK_ESCAPE) {
@@ -1434,6 +1675,8 @@ static void handle_events(void) {
                         g_ui.view = VIEW_STATUS;
                         g_ui.status_scroll_y = 0;
                         diagnostic_run_scan(&g_ui.status_report);
+                    } else if (task == TASK_INSTALL) {
+                        start_install_or_game_selection();
                     } else {
                         g_ui.view = VIEW_TASK_RUNNING;
                         g_ui.modal_task = task;
@@ -1444,7 +1687,14 @@ static void handle_events(void) {
                 }
             }
         } else if (e.type == SDL_TEXTINPUT) {
-            if ((g_ui.view == VIEW_PLATFORM_SELECT || g_ui.view == VIEW_UNINSTALL_SELECT) && g_ui.search_active) {
+            if (g_ui.view == VIEW_GAME_SELECT && g_ui.game_search_active) {
+                if (strcmp(e.text.text, "/") == 0 && g_ui.game_search_len == 0) continue;
+                if (g_ui.game_search_len + (int)strlen(e.text.text) < (int)sizeof(g_ui.game_search_filter) - 1) {
+                    strcat(g_ui.game_search_filter, e.text.text);
+                    g_ui.game_search_len = (int)strlen(g_ui.game_search_filter);
+                    ui_update_filtered_games();
+                }
+            } else if ((g_ui.view == VIEW_PLATFORM_SELECT || g_ui.view == VIEW_UNINSTALL_SELECT) && g_ui.search_active) {
                 if (g_ui.search_len + (int)strlen(e.text.text) < (int)sizeof(g_ui.search_filter) - 1) {
                     strcat(g_ui.search_filter, e.text.text);
                     g_ui.search_len = (int)strlen(g_ui.search_filter);
@@ -1467,7 +1717,7 @@ static void handle_events(void) {
             mode_btn.rect.x = g_ui.window_width - mode_btn.rect.w - MARGIN_CONTAINER;
             mode_btn.rect.y = (HEADER_HEIGHT - mode_btn.rect.h) / 2;
 
-            if (ui_button_hit_test(&mode_btn, mx, my)) {
+            if (g_ui.view != VIEW_CATALOG_LOADING && ui_button_hit_test(&mode_btn, mx, my)) {
                 audio_play_sound(SOUND_TOGGLE);
                 set_setup_mode(g_config.mode == MODE_STEAM ? MODE_STANDALONE : MODE_STEAM);
                 load_selected_platforms_config();
@@ -1490,6 +1740,64 @@ static void handle_events(void) {
             }
 
             // 3. View-specific mouse clicks
+            if (g_ui.view == VIEW_GAME_SELECT) {
+                int control_y = HEADER_HEIGHT + 18 + 36 + 24;
+                const int search_width = 430;
+                SDL_Rect search_rect = { MARGIN_CONTAINER, control_y, search_width, BUTTON_HEIGHT };
+                if (is_point_in_rect(mx, my, search_rect)) {
+                    g_ui.game_search_active = true;
+                    continue;
+                }
+                int button_x = search_rect.x + search_rect.w + 12;
+                const struct { const char* shortcut; const char* label; } actions[] = {
+                    { "[A]", "ALL SHOWN" }, { "[C]", "CLEAR SHOWN" },
+                    { "[ENTER]", "SAVE & INSTALL" }
+                };
+                bool action_handled = false;
+                for (size_t i = 0; i < sizeof(actions) / sizeof(actions[0]); ++i) {
+                    UIButton button;
+                    memset(&button, 0, sizeof(button));
+                    button.shortcut = actions[i].shortcut;
+                    button.label = actions[i].label;
+                    button.scale = FONT_SCALE_BODY;
+                    ui_button_measure(&button, 0, BUTTON_HEIGHT);
+                    button.rect.x = button_x;
+                    button.rect.y = control_y;
+                    if (ui_button_hit_test(&button, mx, my)) {
+                        if (i < 2) {
+                            bool state = i == 0;
+                            for (int game = 0; game < g_ui.game_filtered_count; ++game)
+                                rom_catalog_get(g_ui.game_filtered_indices[game])->selected = state;
+                            save_game_selection();
+                        } else save_games_and_start_install();
+                        action_handled = true;
+                        break;
+                    }
+                    button_x += button.rect.w + 8;
+                }
+                if (action_handled) continue;
+
+                g_ui.game_search_active = false;
+                int list_y = control_y + BUTTON_HEIGHT + 10;
+                int visible = (g_ui.window_height - list_y - FOOTER_HEIGHT - 6) / PLATFORM_ITEM_HEIGHT;
+                for (int row = 0; row < visible; ++row) {
+                    int filtered_index = g_ui.game_scroll_offset + row;
+                    if (filtered_index >= g_ui.game_filtered_count) break;
+                    int catalog_index = g_ui.game_filtered_indices[filtered_index];
+                    RomCatalogGame* game = rom_catalog_get(catalog_index);
+                    if (!game) break;
+                    SDL_Rect rect = { MARGIN_CONTAINER, list_y + row * PLATFORM_ITEM_HEIGHT,
+                                      g_ui.window_width - 2 * MARGIN_CONTAINER, PLATFORM_ITEM_HEIGHT - 4 };
+                    if (is_point_in_rect(mx, my, rect)) {
+                        g_ui.selected_game_index = filtered_index;
+                        game->selected = !game->selected;
+                        save_game_selection();
+                        break;
+                    }
+                }
+                continue;
+            }
+
             if (g_ui.view == VIEW_STATUS) {
                 int btn_y = g_ui.window_height - FOOTER_HEIGHT - 44;
                 UIButton ref_btn;
@@ -1546,14 +1854,7 @@ static void handle_events(void) {
                             g_ui.status_scroll_y = 0;
                             diagnostic_run_scan(&g_ui.status_report);
                         } else if (task == TASK_INSTALL) {
-                            if (get_selected_count() > 1) {
-                                g_ui.view = VIEW_PARALLEL_PROMPT;
-                            } else {
-                                g_config.use_parallel_downloads = false;
-                                g_ui.view = VIEW_TASK_RUNNING;
-                                g_ui.modal_task = task;
-                                task_start_async(task, NULL);
-                            }
+                            start_install_or_game_selection();
                         } else {
                             g_ui.view = VIEW_TASK_RUNNING;
                             g_ui.modal_task = task;
@@ -1654,14 +1955,8 @@ static void handle_events(void) {
                                 g_ui.modal_task = TASK_UNINSTALL;
                                 task_start_async(TASK_UNINSTALL, NULL);
                                 audio_play_sound(SOUND_SELECT);
-                            } else if (get_selected_count() > 1) {
-                                g_ui.view = VIEW_PARALLEL_PROMPT;
-                                audio_play_sound(SOUND_SELECT);
                             } else {
-                                g_config.use_parallel_downloads = false;
-                                g_ui.view = VIEW_TASK_RUNNING;
-                                g_ui.modal_task = TASK_INSTALL;
-                                task_start_async(TASK_INSTALL, NULL);
+                                start_install_or_game_selection();
                                 audio_play_sound(SOUND_FANFARE);
                             }
                         }
@@ -1751,6 +2046,7 @@ void ui_run_main_loop(void) {
 
     while (g_ui.running) {
         handle_events();
+        finish_catalog_loading();
 
         SDL_SetRenderDrawColor(g_ui.renderer, 0, 0, 0, 255);
         SDL_RenderClear(g_ui.renderer);
@@ -1762,6 +2058,12 @@ void ui_run_main_loop(void) {
             case VIEW_PLATFORM_SELECT:
             case VIEW_UNINSTALL_SELECT:
                 draw_platform_selector();
+                break;
+            case VIEW_CATALOG_LOADING:
+                draw_catalog_loading();
+                break;
+            case VIEW_GAME_SELECT:
+                draw_game_selector();
                 break;
             case VIEW_STATUS:
                 draw_system_status_view();

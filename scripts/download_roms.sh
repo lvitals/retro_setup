@@ -68,6 +68,7 @@ download_file() {
 
     mkdir -p "$dest_dir"
     filename="$(basename "${url%%\?*}")"
+    printf -v filename '%b' "${filename//%/\\x}"
     [ -n "$filename" ] || filename="$platform.download"
 
     echo "Downloading $platform: $filename"
@@ -106,7 +107,7 @@ download_directory() {
         --recursive \
         --no-parent \
         --no-directories \
-        --accept "zip,7z,iso,chd,bin,cue,rvz,gcm,n64,z64,v64,nes,sfc,smc,gb,gbc,gba,a26,a52,a78,lnx,md,gen,sms,gg,32x,sg,pce,ws,wsc,col,int,rom,mx1,mx2,dsk,j64" \
+        --accept "zip,7z,elf,iso,ciso,chd,cso,bin,cue,mdf,nrg,dump,gz,img,m3u,rvz,gcm,n64,z64,v64,nes,sfc,smc,gb,gbc,gba,a26,a52,a78,lnx,md,gen,sms,gg,32x,sg,pce,ws,wsc,col,int,rom,mx1,mx2,dsk,j64" \
         "$url" \
         -P "$dest_dir"
 }
@@ -131,6 +132,8 @@ echo "=== ROM Download ==="
 echo "Platform config: $RETRO_SETUP_CONFIG"
 echo "URLs: $RETRO_URL_CONFIG"
 
+ROM_SELECTION_CONFIG="${ROM_SELECTION_CONFIG:-$RETRO_SETUP_CONFIG_DIR/selected_roms.conf}"
+
 for platform in "${SELECTED_PLATFORMS[@]}"; do
     echo "------------------------------------------"
     echo "SYSTEM: $platform - ${PLATFORM_NAME[$platform]}"
@@ -154,9 +157,22 @@ for platform in "${SELECTED_PLATFORMS[@]}"; do
         download_archive_item "$platform" "$item_id"
     done < <(get_array_values "ARCHIVE_COMPRESS_URLS_$platform")
 
+    if [ -f "$ROM_SELECTION_CONFIG" ]; then
+        while IFS='|' read -r selected_platform url; do
+            [ "$selected_platform" = "$platform" ] || continue
+            [ -n "$url" ] || continue
+            found_source=true
+            download_file "$platform" "$url"
+        done < "$ROM_SELECTION_CONFIG"
+    fi
+
     if [ "$found_source" = false ]; then
-        echo "No source configured for $platform."
-        echo "Edit $RETRO_URL_CONFIG, open [$platform], and add: rom_url = https://..."
+        if declare -p "ROM_CATALOG_URLS_$platform" >/dev/null 2>&1; then
+            echo "No individual game selected for $platform. Select games in retro_setup_gui."
+        else
+            echo "No source configured for $platform."
+            echo "Edit $RETRO_URL_CONFIG, open [$platform], and add: rom_url = https://..."
+        fi
     fi
 done
 

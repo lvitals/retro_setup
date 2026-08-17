@@ -1,8 +1,11 @@
 #include "platform_data.h"
+#include "config.h"
+#include "fs.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <dirent.h>
 
 PlatformInfo g_platforms[MAX_PLATFORMS];
 int g_platform_count = 0;
@@ -95,6 +98,43 @@ static void remove_platform_by_id(const char* id) {
         g_platforms[i] = g_platforms[i + 1];
     }
     g_platform_count--;
+}
+
+static bool extension_is_allowed(const char* filename, const char* extensions) {
+    if (!extensions || !extensions[0]) return true;
+    const char* dot = strrchr(filename, '.');
+    if (!dot || !dot[1]) return false;
+
+    char allowed[sizeof(((PlatformInfo*)0)->bios_extensions)];
+    snprintf(allowed, sizeof(allowed), "%s", extensions);
+    char* save = NULL;
+    for (char* ext = strtok_r(allowed, " ,;", &save); ext; ext = strtok_r(NULL, " ,;", &save)) {
+        if (ext[0] == '.') ext++;
+        if (strcasecmp(dot + 1, ext) == 0) return true;
+    }
+    return false;
+}
+
+bool platform_bios_path_valid(const PlatformInfo* p, const char* path) {
+    if (!p || !path) return false;
+    if (fs_is_file(path)) {
+        return extension_is_allowed(path, p->bios_extensions) &&
+               fs_file_size(path) >= p->bios_min_size;
+    }
+    if (!fs_is_dir(path)) return false;
+
+    DIR* dir = opendir(path);
+    if (!dir) return false;
+    bool valid = false;
+    struct dirent* entry;
+    while (!valid && (entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.') continue;
+        char child[MAX_PATH_LEN];
+        fs_join_path(child, sizeof(child), path, entry->d_name);
+        valid = platform_bios_path_valid(p, child);
+    }
+    closedir(dir);
+    return valid;
 }
 
 void platform_data_load_custom(const char* config_path) {
@@ -190,6 +230,17 @@ void platform_data_load_custom(const char* config_path) {
                 add_or_update_platform(current_section_id, NULL, NULL, NULL, NULL, val, NULL, 0);
             } else if (strcmp(key, "bios_files") == 0 || strcmp(key, "bios") == 0) {
                 add_or_update_platform(current_section_id, NULL, NULL, NULL, NULL, NULL, val, 0);
+            } else if (strcmp(key, "bios_extensions") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) snprintf(g_platforms[idx].bios_extensions,
+                                       sizeof(g_platforms[idx].bios_extensions), "%s", val);
+            } else if (strcmp(key, "bios_min_size") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) g_platforms[idx].bios_min_size = strtoll(val, NULL, 10);
+            } else if (strcmp(key, "bios_missing_action") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) snprintf(g_platforms[idx].bios_missing_action,
+                                       sizeof(g_platforms[idx].bios_missing_action), "%s", val);
             } else if (strcmp(key, "color") == 0) {
                 unsigned int color_hex = parse_color_name_or_hex(val);
                 add_or_update_platform(current_section_id, NULL, NULL, NULL, NULL, NULL, NULL, color_hex);
@@ -249,4 +300,25 @@ void select_by_category(const char* category_name, bool select_state) {
             g_platforms[i].selected = select_state;
         }
     }
+}
+
+bool platform_resolve_core(const PlatformInfo* p, const char* ra_dir, char* out_file, size_t file_size, char* out_name, size_t name_size, char* out_path, size_t path_size) {
+    if (!p || !ra_dir) return false;
+
+    char core_file[128] = {0}, core_name[128] = {0};
+    snprintf(core_file, sizeof(core_file), "%s", p->core_file);
+    snprintf(core_name, sizeof(core_name), "%s", p->core_name);
+
+    char cores_dir[MAX_PATH_LEN];
+    fs_join_path(cores_dir, sizeof(cores_dir), ra_dir, "cores");
+    char full_path[MAX_PATH_LEN];
+    fs_join_path(full_path, sizeof(full_path), cores_dir, core_file);
+
+    bool found = fs_exists(full_path) && fs_file_size(full_path) > 0;
+
+    if (out_file && file_size > 0) snprintf(out_file, file_size, "%s", core_file);
+    if (out_name && name_size > 0) snprintf(out_name, name_size, "%s", core_name);
+    if (out_path && path_size > 0) snprintf(out_path, path_size, "%s", full_path);
+
+    return found;
 }

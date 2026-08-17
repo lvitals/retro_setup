@@ -2,6 +2,8 @@
 #include "download.h"
 #include "fs.h"
 #include "playlist.h"
+#include "rom_catalog.h"
+#include "steam_shortcuts.h"
 #include "platform_data.h"
 #include "config_url_parser.h"
 #include "log.h"
@@ -11,6 +13,7 @@
 #include <strings.h>
 #include <ctype.h>
 #include <dirent.h>
+#include <sys/utsname.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_thread.h>
 #include <SDL2/SDL_atomic.h>
@@ -196,6 +199,7 @@ static void configure_retroarch_paths(void) {
         log_add(LOG_LEVEL_INFO, "[INSTALL] RetroArch paths configured for %s mode",
                 g_config.mode == MODE_STEAM ? "Steam" : "standalone");
     else fs_remove_file(temp_path);
+
 }
 
 typedef struct {
@@ -206,15 +210,38 @@ typedef struct {
     SDL_atomic_t* error_counter;
 } PlatformTaskWorkArgs;
 
+static bool get_core_base_url(char* out, size_t out_size) {
+    const char* configured = url_config_get_string("LIBRETRO_CORE_BASE_URL", NULL);
+    if (configured && *configured) {
+        snprintf(out, out_size, "%s", configured);
+        return true;
+    }
+
+    struct utsname host;
+    if (uname(&host) != 0) return false;
+
+    const char* buildbot_arch = NULL;
+    if (strcmp(host.machine, "x86_64") == 0 || strcmp(host.machine, "amd64") == 0)
+        buildbot_arch = "x86_64";
+    else if (strcmp(host.machine, "aarch64") == 0 || strcmp(host.machine, "arm64") == 0)
+        buildbot_arch = "aarch64";
+
+    if (!buildbot_arch) return false;
+    snprintf(out, out_size, "https://buildbot.libretro.com/nightly/linux/%s/latest", buildbot_arch);
+    return true;
+}
+
 static bool process_platform_downloads(PlatformInfo* p) {
-    const char* core_base_url = url_config_get_string("LIBRETRO_CORE_BASE_URL", "https://buildbot.libretro.com/nightly/linux/x86_64/latest");
+    char core_base_url[MAX_URL_LEN];
     bool has_errors = false;
 
     // 1. Download Core (if a compatible libretro implementation exists)
     char cores_dir[MAX_PATH_LEN];
     fs_join_path(cores_dir, sizeof(cores_dir), g_config.ra_dir, "cores");
-    char core_target[MAX_PATH_LEN];
-    fs_join_path(core_target, sizeof(core_target), cores_dir, p->core_file);
+
+    char resolved_file[128], resolved_name[128], core_target[MAX_PATH_LEN];
+    bool already_installed = platform_resolve_core(p, g_config.ra_dir, resolved_file, sizeof(resolved_file),
+                                                   resolved_name, sizeof(resolved_name), core_target, sizeof(core_target));
 
     SDL_LockMutex(g_shared_asset_mutex);
     if (!p->core_file[0]) {
@@ -223,10 +250,13 @@ static bool process_platform_downloads(PlatformInfo* p) {
                 "ROMs will be preserved in %s/%s for a compatible external emulator; no fallback core will be used.",
                 p->name, g_config.rom_dir, p->id);
         has_errors = true;
-    } else if (fs_exists(core_target) && fs_file_size(core_target) > 0) {
-        log_add(LOG_LEVEL_INFO, "Core %s already installed, skipping download.", p->core_file);
+    } else if (already_installed) {
+        log_add(LOG_LEVEL_INFO, "Core %s already installed, skipping download.", resolved_file);
+    } else if (!get_core_base_url(core_base_url, sizeof(core_base_url))) {
+        log_add(LOG_LEVEL_ERROR, "[UNSUPPORTED] Configure libretro_core_base_url for this CPU architecture in retro_url.config.");
+        has_errors = true;
     } else {
-        char core_url[1024];
+        char core_url[MAX_URL_LEN + sizeof(p->core_file) + sizeof("/.zip")];
         snprintf(core_url, sizeof(core_url), "%s/%s.zip", core_base_url, p->core_file);
 
         char core_zip[MAX_PATH_LEN];
@@ -235,14 +265,19 @@ static bool process_platform_downloads(PlatformInfo* p) {
         fs_join_path(core_zip, sizeof(core_zip), g_config.config_dir, core_zip_name);
 
         DownloadResult dl;
-        if (download_file(core_url, core_zip, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl)) {
+        bool dl_ok = download_file(core_url, core_zip, download_progress_cb, NULL, &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl);
+
+        if (dl_ok) {
             log_add(LOG_LEVEL_INFO, "[EXTRACT] %s", core_zip_name);
-            if (!fs_extract_archive(core_zip, cores_dir) || !fs_exists(core_target)) {
+            bool extracted = fs_extract_archive(core_zip, cores_dir);
+            bool is_installed = platform_resolve_core(p, g_config.ra_dir, resolved_file, sizeof(resolved_file),
+                                                      resolved_name, sizeof(resolved_name), core_target, sizeof(core_target));
+            if (!extracted || !is_installed) {
                 log_add(LOG_LEVEL_ERROR, "[FAILED] Core archive did not install %s", p->core_file);
                 has_errors = true;
             } else {
                 fs_remove_file(core_zip);
-                log_add(LOG_LEVEL_INFO, "[DONE] Core installed: %s", p->core_file);
+                log_add(LOG_LEVEL_INFO, "[DONE] Core installed for %s: %s (%s)", p->name, resolved_file, resolved_name);
             }
         } else {
             log_add(LOG_LEVEL_ERROR, "ERROR: Failed to download core %s for %s: %s (HTTP status: %ld)", p->core_file, p->name, dl.error, dl.http_status);
@@ -261,6 +296,22 @@ static bool process_platform_downloads(PlatformInfo* p) {
     char sys_dir[MAX_PATH_LEN];
     fs_join_path(sys_dir, sizeof(sys_dir), g_config.ra_dir, "system");
     fs_mkdir_p(sys_dir);
+
+    /* Catalog entries without a filename extension represent required
+       directories. This keeps platform-specific layouts in platforms.config. */
+    char bios_layout[sizeof(p->bios_files)];
+    snprintf(bios_layout, sizeof(bios_layout), "%s", p->bios_files);
+    char* layout_save = NULL;
+    for (char* entry = strtok_r(bios_layout, " ,;", &layout_save); entry;
+         entry = strtok_r(NULL, " ,;", &layout_save)) {
+        const char* leaf = strrchr(entry, '/');
+        leaf = leaf ? leaf + 1 : entry;
+        if (!strchr(leaf, '.')) {
+            char required_dir[MAX_PATH_LEN];
+            fs_join_path(required_dir, sizeof(required_dir), sys_dir, entry);
+            fs_mkdir_p(required_dir);
+        }
+    }
 
     for (int b = 0; b < bios_cnt; b++) {
         while (g_task_mgr.pause_requested && !g_task_mgr.cancel_requested) SDL_Delay(100);
@@ -297,6 +348,29 @@ static bool process_platform_downloads(PlatformInfo* p) {
         if (!bios_ok) {
             has_errors = true;
             return false;
+        }
+    }
+
+    /* Some directory-based BIOS layouts need content validation (for example,
+       an extension and minimum dump size). The rules come from platforms.config. */
+    if (p->bios_extensions[0] || p->bios_min_size > 0) {
+        char required_copy[sizeof(p->bios_files)];
+        snprintf(required_copy, sizeof(required_copy), "%s", p->bios_files);
+        char* required_save = NULL;
+        for (char* entry = strtok_r(required_copy, " ,;", &required_save); entry;
+             entry = strtok_r(NULL, " ,;", &required_save)) {
+            char required_path[MAX_PATH_LEN];
+            fs_join_path(required_path, sizeof(required_path), sys_dir, entry);
+            if (!platform_bios_path_valid(p, required_path)) {
+                bool warn_only = strcasecmp(p->bios_missing_action, "warn") == 0;
+                log_add(warn_only ? LOG_LEVEL_WARN : LOG_LEVEL_ERROR,
+                        "[BIOS REQUIRED] %s needs a valid BIOS in %s (extensions: %s, minimum size: %lld bytes). Installation will %s; copy a dump from your own console before launching games.",
+                        p->name, required_path,
+                        p->bios_extensions[0] ? p->bios_extensions : "any",
+                        p->bios_min_size,
+                        warn_only ? "continue" : "stop");
+                if (!warn_only) return false;
+            }
         }
     }
 
@@ -357,9 +431,33 @@ static bool process_platform_downloads(PlatformInfo* p) {
                 return false;
             }
         }
-    } else {
-        log_add(LOG_LEVEL_WARN, "No ROM URLs configured in retro_url.config for platform %s (%s)", p->name, p->id);
     }
+
+    char catalog_rom_dir[MAX_PATH_LEN];
+    fs_join_path(catalog_rom_dir, sizeof(catalog_rom_dir), g_config.rom_dir, p->id);
+    bool has_selected_catalog_game = false;
+    for (int i = 0; i < rom_catalog_count(); ++i) {
+        RomCatalogGame* game = rom_catalog_get(i);
+        if (!game || !game->selected || strcmp(game->platform_id, p->id) != 0) continue;
+        has_selected_catalog_game = true;
+        fs_mkdir_p(catalog_rom_dir);
+        char destination[MAX_PATH_LEN];
+        fs_join_path(destination, sizeof(destination), catalog_rom_dir, game->name);
+        if (fs_exists(destination) && fs_file_size(destination) > 0) {
+            log_add(LOG_LEVEL_INFO, "Catalog game already installed: %s", game->name);
+            continue;
+        }
+        DownloadResult dl;
+        log_add(LOG_LEVEL_INFO, "Downloading selected game for %s: %s", p->id, game->name);
+        if (!download_file(game->url, destination, download_progress_cb, NULL,
+                           &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl)) {
+            log_add(LOG_LEVEL_ERROR, "ERROR: Failed to download %s: %s (HTTP %ld)",
+                    game->name, dl.error, dl.http_status);
+            return false;
+        }
+    }
+    if (rom_cnt == 0 && !has_selected_catalog_game)
+        log_add(LOG_LEVEL_WARN, "No ROM pack or individual game selected for %s (%s)", p->name, p->id);
 
     return !has_errors;
 }
@@ -392,6 +490,9 @@ static int do_task_install(void) {
     }
 
     url_config_load(g_config.url_config_file);
+    char game_selection_file[MAX_PATH_LEN];
+    fs_join_path(game_selection_file, sizeof(game_selection_file), g_config.config_dir, "selected_roms.conf");
+    if (rom_catalog_count() == 0) rom_catalog_refresh(g_config.url_config_file, game_selection_file);
     download_manager_reset();
     cleanup_obsolete_managed_playlists();
     SDL_AtomicSet(&g_task_mgr.work_completed, 0);
@@ -713,11 +814,18 @@ static int do_task_uninstall(void) {
             fs_join_path(bios_path, sizeof(bios_path), g_config.ra_dir, "system");
             char full_bios[MAX_PATH_LEN];
             fs_join_path(full_bios, sizeof(full_bios), bios_path, bios);
-            if (fs_exists(full_bios) && fs_remove_file(full_bios))
-                log_add(LOG_LEVEL_INFO, "[REMOVE] BIOS: %s", full_bios);
+            bool removed = fs_is_dir(full_bios)
+                ? fs_remove_dir_recursive(full_bios, bios_path)
+                : fs_remove_file(full_bios);
+            if (removed) log_add(LOG_LEVEL_INFO, "[REMOVE] BIOS: %s", full_bios);
         }
+
         SDL_AtomicSet(&g_task_mgr.work_completed, processed);
         g_task_mgr.progress = (float)processed / (float)selected_cnt;
+    }
+
+    if (g_config.mode == MODE_STEAM) {
+        steam_shortcuts_sync(g_config.ra_dir, g_config.rom_dir);
     }
 
     if (g_task_mgr.cancel_requested) return -1;

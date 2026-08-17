@@ -4,7 +4,7 @@
 # Mantem id, playlist RetroArch, core, extensoes, BIOS e observacoes em um lugar.
 
 PLATFORM_IDS=(
-    nes snes n64 gb gbc gba fds satellaview gamecube ps1
+    nes snes n64 gb gbc gba fds satellaview gamecube ps1 ps2
     mastersystem gamegear megadrive sega32x segacd sg1000 saturn
     neogeo neogeocd neogeopocket neogeopocketcolor
     msx msx2
@@ -24,6 +24,7 @@ declare -A PLATFORM_NAME=(
     [satellaview]="Nintendo - Satellaview"
     [gamecube]="Nintendo - GameCube"
     [ps1]="Sony - PlayStation"
+    [ps2]="Sony - PlayStation 2"
     [mastersystem]="Sega - Master System - Mark III"
     [gamegear]="Sega - Game Gear"
     [megadrive]="Sega - Mega Drive - Genesis"
@@ -64,6 +65,7 @@ declare -A PLATFORM_CORE=(
     [satellaview]="snes9x_libretro.so|Snes9x"
     [gamecube]="dolphin_libretro.so|Nintendo - GameCube / Wii (Dolphin)"
     [ps1]="pcsx_rearmed_libretro.so|Sony - PlayStation (PCSX ReARMed)"
+    [ps2]="pcsx2_libretro.so|Sony - PlayStation 2 (LRPS2)"
     [mastersystem]="genesis_plus_gx_libretro.so|Sega - MS/GG/MD/CD (Genesis Plus GX)"
     [gamegear]="genesis_plus_gx_libretro.so|Sega - MS/GG/MD/CD (Genesis Plus GX)"
     [megadrive]="genesis_plus_gx_libretro.so|Sega - MS/GG/MD/CD (Genesis Plus GX)"
@@ -96,6 +98,7 @@ declare -A PLATFORM_CORE=(
 declare -A PLATFORM_EXTENSIONS=(
     [nes]="nes" [snes]="sfc smc" [n64]="n64 z64 v64" [gb]="gb" [gbc]="gbc" [gba]="gba"
     [fds]="fds" [satellaview]="bs" [gamecube]="iso gcm rvz" [ps1]="chd cue iso bin pbp"
+    [ps2]="elf iso ciso chd cso bin mdf nrg dump gz img m3u"
     [mastersystem]="sms" [gamegear]="gg" [megadrive]="md gen bin" [sega32x]="32x"
     [segacd]="chd cue iso" [sg1000]="sg" [saturn]="chd cue iso"
     [neogeo]="zip" [neogeocd]="chd cue iso" [neogeopocket]="ngp" [neogeopocketcolor]="ngc"
@@ -110,6 +113,7 @@ declare -A PLATFORM_EXTENSIONS=(
 declare -A PLATFORM_BIOS=(
     [fds]="disksys.rom"
     [ps1]="scph5500.bin scph5501.bin scph5502.bin"
+    [ps2]="pcsx2/bios"
     [atomiswave]="dc/awbios.zip"
     [flycast]="dc/naomi.zip"
     [segacd]="bios_CD_U.bin bios_CD_E.bin bios_CD_J.bin"
@@ -124,6 +128,20 @@ declare -A PLATFORM_BIOS=(
     [pcfx]="pcfx.rom"
     [atari5200]="5200.rom"
     [atarilynx]="lynxboot.img"
+)
+
+# Optional content rules for directory-based BIOS requirements. Values live in
+# the platform catalog instead of being embedded in installer logic.
+declare -A PLATFORM_BIOS_EXTENSIONS=(
+    [ps2]="bin rom0"
+)
+
+declare -A PLATFORM_BIOS_COPY_EXTENSIONS=(
+    [ps2]="bin rom0 rom1 rom2 erom nvm mec"
+)
+
+declare -A PLATFORM_BIOS_MIN_SIZE=(
+    [ps2]="4194304"
 )
 
 platform_exists() {
