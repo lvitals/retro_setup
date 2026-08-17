@@ -62,6 +62,11 @@ generate_playlist() {
     local core_file core_name core_path playlist_file
 
     IFS='|' read -r core_file core_name <<< "${PLATFORM_CORE[$platform]}"
+    if [ "${PLATFORM_FALLBACK_WITHOUT_BIOS[$platform]:-false}" = true ] &&
+       ! platform_bios_valid "$platform" "$RA_DIR/system" &&
+       [ -n "${PLATFORM_FALLBACK_CORE[$platform]:-}" ]; then
+        IFS='|' read -r core_file core_name <<< "${PLATFORM_FALLBACK_CORE[$platform]}"
+    fi
     core_path="$CORES_DIR/$core_file"
     playlist_file="$PLAYLIST_DIR/$playlist_name.lpl"
 

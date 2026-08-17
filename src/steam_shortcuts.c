@@ -488,6 +488,7 @@ static void scan_roms_for_platform(const PlatformInfo* platform, const char* rom
                                    const char* ra_bin, const char* core_path,
                                    const char* ra_dir, bool use_gamemode,
                                    const char* steam_runtime_bin, const char* steam_app_id,
+                                   bool allow_new,
                                    SteamShortcut* shortcuts, int* shortcut_count, int max_shortcuts) {
     DIR* d = opendir(rom_dir);
     if (!d) return;
@@ -502,6 +503,7 @@ static void scan_roms_for_platform(const PlatformInfo* platform, const char* rom
         if (fs_is_dir(full_path)) {
             scan_roms_for_platform(platform, full_path, ra_bin, core_path, ra_dir, use_gamemode,
                                    steam_runtime_bin, steam_app_id,
+                                   allow_new,
                                    shortcuts, shortcut_count, max_shortcuts);
             continue;
         }
@@ -557,7 +559,7 @@ static void scan_roms_for_platform(const PlatformInfo* platform, const char* rom
             }
         }
 
-        if (!found && *shortcut_count < max_shortcuts) {
+        if (!found && allow_new && *shortcut_count < max_shortcuts) {
             SteamShortcut* s = &shortcuts[*shortcut_count];
             memset(s, 0, sizeof(SteamShortcut));
             snprintf(s->app_name, sizeof(s->app_name), "%s", title);
@@ -675,22 +677,22 @@ bool steam_shortcuts_sync(const char* ra_dir, const char* rom_base_dir) {
             }
         }
 
-        // Scan installed ROMs for all selected platforms
+        // Scan every installed ROM directory. Selection controls installation,
+        // not maintenance of shortcuts that are already part of the library.
         int games_added_or_updated = 0;
         for (int p = 0; p < TOTAL_PLATFORMS; p++) {
-            if (!g_platforms[p].selected) continue;
-
-            char core_path[MAX_PATH_LEN];
-            platform_resolve_core(&g_platforms[p], ra_dir, NULL, 0, NULL, 0, core_path, sizeof(core_path));
-
             char plat_rom_dir[MAX_PATH_LEN];
             fs_join_path(plat_rom_dir, sizeof(plat_rom_dir), rom_base_dir, g_platforms[p].id);
             if (!fs_is_dir(plat_rom_dir)) continue;
+
+            char core_path[MAX_PATH_LEN];
+            platform_resolve_core(&g_platforms[p], ra_dir, NULL, 0, NULL, 0, core_path, sizeof(core_path));
 
             int prev_count = shortcut_count;
             scan_roms_for_platform(&g_platforms[p], plat_rom_dir, ra_bin, core_path, ra_dir,
                                    use_gamemode, use_steam_runtime ? steam_runtime_bin : NULL,
                                    use_steam_runtime ? steam_app_id : NULL,
+                                   g_platforms[p].selected,
                                    shortcuts, &shortcut_count, MAX_STEAM_SHORTCUTS);
             games_added_or_updated += (shortcut_count - prev_count);
         }

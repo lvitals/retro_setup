@@ -175,6 +175,16 @@ static bool load_archive_catalog(const PlatformInfo* platform, const char* metad
         if (!name || !has_platform_extension(platform, name) ||
             !matches_any_filter(name, filters, filter_count)) continue;
 
+        bool duplicate = false;
+        for (int existing = 0; existing < g_game_count; ++existing) {
+            if (strcmp(g_games[existing].platform_id, platform->id) == 0 &&
+                strcasecmp(g_games[existing].name, name) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) continue;
+
         CURL* encoder = curl_easy_init();
         if (!encoder) continue;
         char* encoded_name = curl_easy_escape(encoder, name, 0);

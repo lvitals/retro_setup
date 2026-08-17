@@ -340,6 +340,30 @@ copy_selected_bios() {
     done
 }
 
+platform_bios_valid() {
+    local platform="$1" dst_dir="$2"
+    local bios file min_size extensions size file_ext valid
+    [ -n "${PLATFORM_BIOS[$platform]:-}" ] || return 0
+    for bios in ${PLATFORM_BIOS[$platform]}; do
+        min_size="${PLATFORM_BIOS_MIN_SIZE[$platform]:-1}"
+        extensions="${PLATFORM_BIOS_EXTENSIONS[$platform]:-}"
+        valid=false
+        while IFS= read -r -d '' file; do
+            size="$(stat -c %s "$file" 2>/dev/null || echo 0)"
+            [ "$size" -ge "$min_size" ] || continue
+            if [ -n "$extensions" ]; then
+                file_ext="${file##*.}"
+                file_ext="${file_ext,,}"
+                case " $extensions " in *" $file_ext "*) ;; *) continue ;; esac
+            fi
+            valid=true
+            break
+        done < <(if [ -d "$dst_dir/$bios" ]; then find "$dst_dir/$bios" -type f -print0 2>/dev/null; elif [ -f "$dst_dir/$bios" ]; then printf '%s\0' "$dst_dir/$bios"; fi)
+        [ "$valid" = true ] || return 1
+    done
+    return 0
+}
+
 check_selected_bios() {
     local dst_dir="${1:-$RA_DIR/system}"
     local missing=false

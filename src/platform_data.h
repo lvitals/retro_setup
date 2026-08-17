@@ -20,11 +20,15 @@ typedef struct {
     char category[64];
     char core_file[128];
     char core_name[128];
+    char fallback_core_file[128];
+    char fallback_core_name[128];
+    bool fallback_core_without_bios;
     char extensions[128];
     char bios_files[256];
     char bios_extensions[128];
     long long bios_min_size;
     char bios_missing_action[16];
+    char obsolete_config_files[1024];
     unsigned int color_hex;
     bool selected;
 } PlatformInfo;
@@ -44,5 +48,9 @@ void reset_all_selections(bool select_state);
 void select_by_category(const char* category_name, bool select_state);
 bool platform_resolve_core(const PlatformInfo* p, const char* ra_dir, char* out_file, size_t file_size, char* out_name, size_t name_size, char* out_path, size_t path_size);
 bool platform_bios_path_valid(const PlatformInfo* p, const char* path);
+bool platform_has_valid_bios(const PlatformInfo* p, const char* ra_dir);
+void platform_get_preferred_core(const PlatformInfo* p, const char* ra_dir,
+                                 char* out_file, size_t file_size,
+                                 char* out_name, size_t name_size);
 
 #endif // PLATFORM_DATA_H

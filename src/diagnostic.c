@@ -184,7 +184,10 @@ void diagnostic_run_scan(SystemDiagnosticReport* report) {
         // BIOS check
         char sys_dir[MAX_PATH_LEN];
         fs_join_path(sys_dir, sizeof(sys_dir), g_config.ra_dir, "system");
-        if (g_platforms[i].bios_files[0]) {
+        bool biosless_fallback = g_platforms[i].fallback_core_without_bios &&
+                                 g_platforms[i].fallback_core_file[0] &&
+                                 strcmp(resolved_core_file, g_platforms[i].fallback_core_file) == 0;
+        if (g_platforms[i].bios_files[0] && !biosless_fallback) {
             char bcopy[512];
             snprintf(bcopy, sizeof(bcopy), "%.500s", g_platforms[i].bios_files);
             char* token = strtok(bcopy, " ,;");

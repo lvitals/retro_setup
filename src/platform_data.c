@@ -226,6 +226,18 @@ void platform_data_load_custom(const char* config_path) {
                 add_or_update_platform(current_section_id, NULL, NULL, val, NULL, NULL, NULL, 0);
             } else if (strcmp(key, "core_name") == 0) {
                 add_or_update_platform(current_section_id, NULL, NULL, NULL, val, NULL, NULL, 0);
+            } else if (strcmp(key, "fallback_core_file") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) snprintf(g_platforms[idx].fallback_core_file,
+                                       sizeof(g_platforms[idx].fallback_core_file), "%s", val);
+            } else if (strcmp(key, "fallback_core_name") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) snprintf(g_platforms[idx].fallback_core_name,
+                                       sizeof(g_platforms[idx].fallback_core_name), "%s", val);
+            } else if (strcmp(key, "fallback_core_without_bios") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) g_platforms[idx].fallback_core_without_bios =
+                    strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0 || strcasecmp(val, "yes") == 0;
             } else if (strcmp(key, "extensions") == 0 || strcmp(key, "ext") == 0) {
                 add_or_update_platform(current_section_id, NULL, NULL, NULL, NULL, val, NULL, 0);
             } else if (strcmp(key, "bios_files") == 0 || strcmp(key, "bios") == 0) {
@@ -241,6 +253,10 @@ void platform_data_load_custom(const char* config_path) {
                 int idx = get_platform_index_by_id(current_section_id);
                 if (idx >= 0) snprintf(g_platforms[idx].bios_missing_action,
                                        sizeof(g_platforms[idx].bios_missing_action), "%s", val);
+            } else if (strcmp(key, "obsolete_config_files") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) snprintf(g_platforms[idx].obsolete_config_files,
+                                       sizeof(g_platforms[idx].obsolete_config_files), "%s", val);
             } else if (strcmp(key, "color") == 0) {
                 unsigned int color_hex = parse_color_name_or_hex(val);
                 add_or_update_platform(current_section_id, NULL, NULL, NULL, NULL, NULL, NULL, color_hex);
@@ -302,12 +318,39 @@ void select_by_category(const char* category_name, bool select_state) {
     }
 }
 
+bool platform_has_valid_bios(const PlatformInfo* p, const char* ra_dir) {
+    if (!p || !ra_dir || !p->bios_files[0]) return true;
+    char system_dir[MAX_PATH_LEN];
+    fs_join_path(system_dir, sizeof(system_dir), ra_dir, "system");
+    char requirements[sizeof(p->bios_files)];
+    snprintf(requirements, sizeof(requirements), "%s", p->bios_files);
+    char* save = NULL;
+    for (char* entry = strtok_r(requirements, " ,;", &save); entry;
+         entry = strtok_r(NULL, " ,;", &save)) {
+        char path[MAX_PATH_LEN];
+        fs_join_path(path, sizeof(path), system_dir, entry);
+        if (!platform_bios_path_valid(p, path)) return false;
+    }
+    return true;
+}
+
+void platform_get_preferred_core(const PlatformInfo* p, const char* ra_dir,
+                                 char* out_file, size_t file_size,
+                                 char* out_name, size_t name_size) {
+    if (!p) return;
+    bool fallback = p->fallback_core_without_bios && p->fallback_core_file[0] &&
+                    !platform_has_valid_bios(p, ra_dir);
+    if (out_file && file_size)
+        snprintf(out_file, file_size, "%s", fallback ? p->fallback_core_file : p->core_file);
+    if (out_name && name_size)
+        snprintf(out_name, name_size, "%s", fallback ? p->fallback_core_name : p->core_name);
+}
+
 bool platform_resolve_core(const PlatformInfo* p, const char* ra_dir, char* out_file, size_t file_size, char* out_name, size_t name_size, char* out_path, size_t path_size) {
     if (!p || !ra_dir) return false;
 
     char core_file[128] = {0}, core_name[128] = {0};
-    snprintf(core_file, sizeof(core_file), "%s", p->core_file);
-    snprintf(core_name, sizeof(core_name), "%s", p->core_name);
+    platform_get_preferred_core(p, ra_dir, core_file, sizeof(core_file), core_name, sizeof(core_name));
 
     char cores_dir[MAX_PATH_LEN];
     fs_join_path(cores_dir, sizeof(cores_dir), ra_dir, "cores");

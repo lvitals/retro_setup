@@ -7,6 +7,7 @@
 #include "audio.h"
 #include "ui.h"
 #include "tasks.h"
+#include "steam_shortcuts.h"
 
 static void print_cli_help(const char* prog_name) {
     printf("Retro Setup - RetroArch Automation & GUI (Standalone Native C Version)\n\n");
@@ -22,6 +23,7 @@ static void print_cli_help(const char* prog_name) {
     printf("  --implode     Reset local RetroArch configuration\n");
     printf("  --status      Show platforms and configuration files\n");
     printf("  --diagnostic  Audit installations and test configured URLs\n");
+    printf("  --sync-steam-shortcuts  Synchronize installed ROMs with Steam\n");
     printf("  --steam       Force Steam RetroArch mode\n");
     printf("  --gui         Force launch Graphical User Interface\n");
     printf("  --help, -h    Show this help message\n\n");
@@ -34,6 +36,7 @@ int main(int argc, char* argv[]) {
 
     bool force_gui = false;
     bool force_cli = false;
+    bool sync_steam_shortcuts = false;
     TaskType cli_task = TASK_NONE;
 
     for (int i = 1; i < argc; i++) {
@@ -62,6 +65,9 @@ int main(int argc, char* argv[]) {
             force_cli = true;
         } else if (strcmp(argv[i], "--diagnostic") == 0) {
             cli_task = TASK_INSTALLATION_DIAGNOSTIC;
+            force_cli = true;
+        } else if (strcmp(argv[i], "--sync-steam-shortcuts") == 0) {
+            sync_steam_shortcuts = true;
             force_cli = true;
         } else if (strcmp(argv[i], "--select") == 0) {
             force_gui = true;
@@ -98,6 +104,11 @@ int main(int argc, char* argv[]) {
             print_cli_help(argv[0]);
             return 0;
         }
+    }
+
+    if (sync_steam_shortcuts) {
+        set_setup_mode(MODE_STEAM);
+        return steam_shortcuts_sync(g_config.ra_dir, g_config.rom_dir) ? 0 : 1;
     }
 
     // Determine whether to launch GUI or CLI

@@ -235,16 +235,35 @@ static bool process_platform_downloads(PlatformInfo* p) {
     char core_base_url[MAX_URL_LEN];
     bool has_errors = false;
 
+    /* Remove only relative files explicitly declared obsolete by the platform
+       catalog. This migrates old generated overrides without platform logic. */
+    if (p->obsolete_config_files[0]) {
+        char obsolete[sizeof(p->obsolete_config_files)];
+        snprintf(obsolete, sizeof(obsolete), "%s", p->obsolete_config_files);
+        char* save = NULL;
+        for (char* relative = strtok_r(obsolete, ";", &save); relative;
+             relative = strtok_r(NULL, ";", &save)) {
+            while (*relative == ' ' || *relative == '\t') relative++;
+            if (!relative[0] || relative[0] == '/' || strstr(relative, "..")) continue;
+            char path[MAX_PATH_LEN];
+            fs_join_path(path, sizeof(path), g_config.ra_dir, relative);
+            if (fs_remove_file(path)) log_add(LOG_LEVEL_INFO, "[MIGRATE] Removed obsolete config: %s", path);
+        }
+    }
+
     // 1. Download Core (if a compatible libretro implementation exists)
     char cores_dir[MAX_PATH_LEN];
     fs_join_path(cores_dir, sizeof(cores_dir), g_config.ra_dir, "cores");
 
+    char desired_file[128], desired_name[128];
+    platform_get_preferred_core(p, g_config.ra_dir, desired_file, sizeof(desired_file),
+                                desired_name, sizeof(desired_name));
     char resolved_file[128], resolved_name[128], core_target[MAX_PATH_LEN];
     bool already_installed = platform_resolve_core(p, g_config.ra_dir, resolved_file, sizeof(resolved_file),
                                                    resolved_name, sizeof(resolved_name), core_target, sizeof(core_target));
 
     SDL_LockMutex(g_shared_asset_mutex);
-    if (!p->core_file[0]) {
+    if (!desired_file[0]) {
         log_add(LOG_LEVEL_ERROR,
                 "[UNSUPPORTED] %s has no compatible RetroArch/libretro core. "
                 "ROMs will be preserved in %s/%s for a compatible external emulator; no fallback core will be used.",
@@ -256,12 +275,12 @@ static bool process_platform_downloads(PlatformInfo* p) {
         log_add(LOG_LEVEL_ERROR, "[UNSUPPORTED] Configure libretro_core_base_url for this CPU architecture in retro_url.config.");
         has_errors = true;
     } else {
-        char core_url[MAX_URL_LEN + sizeof(p->core_file) + sizeof("/.zip")];
-        snprintf(core_url, sizeof(core_url), "%s/%s.zip", core_base_url, p->core_file);
+        char core_url[MAX_URL_LEN + sizeof(desired_file) + sizeof("/.zip")];
+        snprintf(core_url, sizeof(core_url), "%s/%s.zip", core_base_url, desired_file);
 
         char core_zip[MAX_PATH_LEN];
         char core_zip_name[300];
-        snprintf(core_zip_name, sizeof(core_zip_name), "%s.zip", p->core_file);
+        snprintf(core_zip_name, sizeof(core_zip_name), "%s.zip", desired_file);
         fs_join_path(core_zip, sizeof(core_zip), g_config.config_dir, core_zip_name);
 
         DownloadResult dl;
@@ -273,14 +292,14 @@ static bool process_platform_downloads(PlatformInfo* p) {
             bool is_installed = platform_resolve_core(p, g_config.ra_dir, resolved_file, sizeof(resolved_file),
                                                       resolved_name, sizeof(resolved_name), core_target, sizeof(core_target));
             if (!extracted || !is_installed) {
-                log_add(LOG_LEVEL_ERROR, "[FAILED] Core archive did not install %s", p->core_file);
+                log_add(LOG_LEVEL_ERROR, "[FAILED] Core archive did not install %s", desired_file);
                 has_errors = true;
             } else {
                 fs_remove_file(core_zip);
                 log_add(LOG_LEVEL_INFO, "[DONE] Core installed for %s: %s (%s)", p->name, resolved_file, resolved_name);
             }
         } else {
-            log_add(LOG_LEVEL_ERROR, "ERROR: Failed to download core %s for %s: %s (HTTP status: %ld)", p->core_file, p->name, dl.error, dl.http_status);
+            log_add(LOG_LEVEL_ERROR, "ERROR: Failed to download core %s for %s: %s (HTTP status: %ld)", desired_file, p->name, dl.error, dl.http_status);
             has_errors = true;
         }
     }
@@ -353,7 +372,9 @@ static bool process_platform_downloads(PlatformInfo* p) {
 
     /* Some directory-based BIOS layouts need content validation (for example,
        an extension and minimum dump size). The rules come from platforms.config. */
-    if (p->bios_extensions[0] || p->bios_min_size > 0) {
+    bool using_biosless_fallback = p->fallback_core_without_bios && p->fallback_core_file[0] &&
+                                   strcmp(desired_file, p->fallback_core_file) == 0;
+    if ((p->bios_extensions[0] || p->bios_min_size > 0) && !using_biosless_fallback) {
         char required_copy[sizeof(p->bios_files)];
         snprintf(required_copy, sizeof(required_copy), "%s", p->bios_files);
         char* required_save = NULL;
@@ -372,6 +393,10 @@ static bool process_platform_downloads(PlatformInfo* p) {
                 if (!warn_only) return false;
             }
         }
+    } else if (using_biosless_fallback) {
+        log_add(LOG_LEVEL_WARN,
+                "[CORE FALLBACK] BIOS for %s is unavailable; using %s. Compatibility may be lower than the primary core.",
+                p->name, desired_name);
     }
 
     // 3. Download ROMs if defined in retro_url.config

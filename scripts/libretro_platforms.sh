@@ -95,6 +95,14 @@ declare -A PLATFORM_CORE=(
     [atarijaguarcd]="virtualjaguar_libretro.so|Atari - Jaguar (Virtual Jaguar)"
 )
 
+declare -A PLATFORM_FALLBACK_CORE=(
+    [ps2]="play_libretro.so|Sony - PlayStation 2 (Play!)"
+)
+
+declare -A PLATFORM_FALLBACK_WITHOUT_BIOS=(
+    [ps2]="true"
+)
+
 declare -A PLATFORM_EXTENSIONS=(
     [nes]="nes" [snes]="sfc smc" [n64]="n64 z64 v64" [gb]="gb" [gbc]="gbc" [gba]="gba"
     [fds]="fds" [satellaview]="bs" [gamecube]="iso gcm rvz" [ps1]="chd cue iso bin pbp"
