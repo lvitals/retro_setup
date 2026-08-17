@@ -29,6 +29,9 @@ fi
 # 2. Create required directory structure
 mkdir -p "$RA_DIR/cores" "$RA_DIR/system" "$RA_DIR/core_info" "$RA_DIR/playlists"
 
+# Import user-provided firmware before selecting a BIOS-dependent core.
+copy_selected_bios "$SET_DIR/bios" "$RA_DIR/system"
+
 # 2.1 Download missing cores/info files for selected platforms
 download_selected_core_assets
 
@@ -36,7 +39,7 @@ download_selected_core_assets
 if [ -d "$SET_DIR/cores" ]; then
     echo "Installing cores..."
     for platform in "${SELECTED_PLATFORMS[@]}"; do
-        IFS='|' read -r core_file core_name <<< "${PLATFORM_CORE[$platform]}"
+        IFS='|' read -r core_file core_name <<< "$(platform_selected_core "$platform")"
         if [ -f "$SET_DIR/cores/$core_file" ]; then
             cp -v "$SET_DIR/cores/$core_file" "$RA_DIR/cores/"
         else
@@ -49,7 +52,7 @@ fi
 if [ -d "$SET_DIR/info" ]; then
     echo "Installing core info files..."
     for platform in "${SELECTED_PLATFORMS[@]}"; do
-        IFS='|' read -r core_file _ <<< "${PLATFORM_CORE[$platform]}"
+        IFS='|' read -r core_file _ <<< "$(platform_selected_core "$platform")"
         info_file="${core_file%.so}.info"
         if [ -f "$SET_DIR/info/$info_file" ]; then
             cp -v "$SET_DIR/info/$info_file" "$RA_DIR/core_info/"
@@ -91,6 +94,8 @@ if [ -f "$RA_CONFIG" ]; then
 else
     echo "WARNING: retroarch.cfg not found. Open RetroArch once to generate it, then run this script again."
 fi
+
+configure_selected_core_profiles
 
 echo "=== Configuration Complete! ==="
 echo "BIOS files, cores, and paths are ready to use."

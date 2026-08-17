@@ -103,6 +103,34 @@ declare -A PLATFORM_FALLBACK_WITHOUT_BIOS=(
     [ps2]="true"
 )
 
+declare -A PLATFORM_CORE_CONFIG_NAME=(
+    [ps2]="LRPS2"
+)
+
+declare -A PLATFORM_CORE_OPTIONS=(
+    [ps2]='pcsx2_renderer = "Vulkan"; pcsx2_upscale_multiplier = "1x"; pcsx2_texture_filtering = "Bilinear (PS2)"; pcsx2_anisotropic_filtering = "Disabled"; pcsx2_blending_accuracy = "Basic"; pcsx2_fastboot = "enabled"; pcsx2_mtvu = "enabled"; pcsx2_instant_vu1 = "enabled"; pcsx2_ee_cycle_rate = "100% (Normal Speed)"; pcsx2_ee_cycle_skip = "Disabled"'
+)
+
+declare -A PLATFORM_FRONTEND_OPTIONS=(
+    [ps2]='video_threaded = "true"; video_vsync = "true"; audio_latency = "128"'
+)
+
+declare -A PLATFORM_FALLBACK_CONFIG_NAME=(
+    [ps2]="Play!"
+)
+
+declare -A PLATFORM_FALLBACK_CORE_OPTIONS=(
+    [ps2]='play_bilinear_filtering = "false"; play_presentation_mode = "Fit Screen"; play_res_multi = "1x"'
+)
+
+declare -A PLATFORM_FALLBACK_FRONTEND_OPTIONS=(
+    [ps2]='video_threaded = "true"; video_vsync = "true"; audio_latency = "128"'
+)
+
+declare -A PLATFORM_BIOS_INSTALL_DIRECTORY=(
+    [ps2]="pcsx2/bios"
+)
+
 declare -A PLATFORM_EXTENSIONS=(
     [nes]="nes" [snes]="sfc smc" [n64]="n64 z64 v64" [gb]="gb" [gbc]="gbc" [gba]="gba"
     [fds]="fds" [satellaview]="bs" [gamecube]="iso gcm rvz" [ps1]="chd cue iso bin pbp"

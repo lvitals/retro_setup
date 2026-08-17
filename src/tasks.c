@@ -231,6 +231,99 @@ static bool get_core_base_url(char* out, size_t out_size) {
     return true;
 }
 
+static bool catalog_extension_allowed(const char* filename, const char* extensions) {
+    if (!extensions || !extensions[0]) return true;
+    const char* dot = strrchr(filename, '.');
+    if (!dot || !dot[1]) return false;
+    char configured[256];
+    snprintf(configured, sizeof(configured), "%s", extensions);
+    char* save = NULL;
+    for (char* ext = strtok_r(configured, " ,;", &save); ext;
+         ext = strtok_r(NULL, " ,;", &save))
+        if (!strcasecmp(dot + 1, ext)) return true;
+    return false;
+}
+
+static int import_bios_directory(const char* source, const char* destination,
+                                 const char* extensions) {
+    DIR* dir = opendir(source);
+    if (!dir) return 0;
+    fs_mkdir_p(destination);
+    int imported = 0;
+    struct dirent* entry;
+    while ((entry = readdir(dir))) {
+        if (entry->d_name[0] == '.') continue;
+        char src[MAX_PATH_LEN], dst[MAX_PATH_LEN];
+        fs_join_path(src, sizeof(src), source, entry->d_name);
+        fs_join_path(dst, sizeof(dst), destination, entry->d_name);
+        if (fs_is_dir(src)) imported += import_bios_directory(src, dst, extensions);
+        else if (fs_is_file(src) && catalog_extension_allowed(entry->d_name, extensions) &&
+                 fs_copy_file(src, dst)) imported++;
+    }
+    closedir(dir);
+    return imported;
+}
+
+static int import_platform_bios(const PlatformInfo* p, const char* system_dir) {
+    if (!p->bios_files[0]) return 0;
+    char source_root[MAX_PATH_LEN];
+    fs_join_path(source_root, sizeof(source_root), g_config.repo_dir, "bios");
+    int imported = 0;
+    char layout[sizeof(p->bios_files)];
+    snprintf(layout, sizeof(layout), "%s", p->bios_files);
+    char* save = NULL;
+    for (char* relative = strtok_r(layout, " ,;", &save); relative;
+         relative = strtok_r(NULL, " ,;", &save)) {
+        if (!relative[0] || relative[0] == '/' || strstr(relative, "..")) continue;
+        char source[MAX_PATH_LEN], destination[MAX_PATH_LEN];
+        fs_join_path(source, sizeof(source), source_root, relative);
+        fs_join_path(destination, sizeof(destination), system_dir, relative);
+        if (fs_is_dir(source))
+            imported += import_bios_directory(source, destination, p->bios_copy_extensions);
+        else if (fs_is_file(source) && catalog_extension_allowed(source, p->bios_copy_extensions) &&
+                 fs_copy_file(source, destination)) imported++;
+    }
+    if (imported)
+        log_add(LOG_LEVEL_INFO, "[BIOS] Imported %d user-provided file(s) for %s", imported, p->name);
+    return imported;
+}
+
+static void write_catalog_options(const char* path, const char* options) {
+    if (!options || !options[0]) return;
+    FILE* file = fopen(path, "w");
+    if (!file) return;
+    char content[512];
+    snprintf(content, sizeof(content), "%s", options);
+    char* save = NULL;
+    for (char* line = strtok_r(content, ";", &save); line;
+         line = strtok_r(NULL, ";", &save)) {
+        while (isspace((unsigned char)*line)) line++;
+        size_t length = strlen(line);
+        while (length && isspace((unsigned char)line[length - 1])) line[--length] = 0;
+        if (length) fprintf(file, "%s\n", line);
+    }
+    fclose(file);
+}
+
+static void configure_core_profile(const PlatformInfo* p, const char* desired_file) {
+    bool fallback = p->fallback_core_file[0] && !strcmp(desired_file, p->fallback_core_file);
+    const char* config_name = fallback ? p->fallback_core_config_name : p->core_config_name;
+    const char* core_options = fallback ? p->fallback_core_options : p->core_options;
+    const char* frontend_options = fallback ? p->fallback_frontend_options : p->frontend_options;
+    if (!config_name[0]) return;
+    char config_root[MAX_PATH_LEN], config_dir[MAX_PATH_LEN], filename[256], path[MAX_PATH_LEN];
+    fs_join_path(config_root, sizeof(config_root), g_config.ra_dir, "config");
+    fs_join_path(config_dir, sizeof(config_dir), config_root, config_name);
+    fs_mkdir_p(config_dir);
+    snprintf(filename, sizeof(filename), "%s.opt", config_name);
+    fs_join_path(path, sizeof(path), config_dir, filename);
+    write_catalog_options(path, core_options);
+    snprintf(filename, sizeof(filename), "%s.cfg", config_name);
+    fs_join_path(path, sizeof(path), config_dir, filename);
+    write_catalog_options(path, frontend_options);
+    log_add(LOG_LEVEL_INFO, "[CONFIG] Applied conservative profile for %s", config_name);
+}
+
 static bool process_platform_downloads(PlatformInfo* p) {
     char core_base_url[MAX_URL_LEN];
     bool has_errors = false;
@@ -250,6 +343,13 @@ static bool process_platform_downloads(PlatformInfo* p) {
             if (fs_remove_file(path)) log_add(LOG_LEVEL_INFO, "[MIGRATE] Removed obsolete config: %s", path);
         }
     }
+
+    char sys_dir[MAX_PATH_LEN];
+    fs_join_path(sys_dir, sizeof(sys_dir), g_config.ra_dir, "system");
+    fs_mkdir_p(sys_dir);
+    /* Import user-owned firmware before choosing the core. The source and
+       destination layouts and accepted companion files are catalog data. */
+    import_platform_bios(p, sys_dir);
 
     // 1. Download Core (if a compatible libretro implementation exists)
     char cores_dir[MAX_PATH_LEN];
@@ -305,16 +405,13 @@ static bool process_platform_downloads(PlatformInfo* p) {
     }
     SDL_UnlockMutex(g_shared_asset_mutex);
     if (has_errors) return false;
+    configure_core_profile(p, desired_file);
 
     // 2. Download BIOS if defined in retro_url.config
     char bios_key[128];
     snprintf(bios_key, sizeof(bios_key), "BIOS_URLS_%.64s", p->id);
     char bios_urls[MAX_URLS_PER_KEY][MAX_URL_LEN];
     int bios_cnt = url_config_get_urls(bios_key, bios_urls, MAX_URLS_PER_KEY);
-
-    char sys_dir[MAX_PATH_LEN];
-    fs_join_path(sys_dir, sizeof(sys_dir), g_config.ra_dir, "system");
-    fs_mkdir_p(sys_dir);
 
     /* Catalog entries without a filename extension represent required
        directories. This keeps platform-specific layouts in platforms.config. */
@@ -339,8 +436,14 @@ static bool process_platform_downloads(PlatformInfo* p) {
         fs_get_filename(fn, sizeof(fn), bios_urls[b]);
         if (!fn[0]) snprintf(fn, sizeof(fn), "%.180s_bios.bin", p->id);
 
-        char bios_dst[MAX_PATH_LEN];
-        fs_join_path(bios_dst, sizeof(bios_dst), sys_dir, fn);
+        char bios_install_dir[MAX_PATH_LEN], bios_dst[MAX_PATH_LEN];
+        if (p->bios_install_directory[0] && p->bios_install_directory[0] != '/' &&
+            !strstr(p->bios_install_directory, ".."))
+            fs_join_path(bios_install_dir, sizeof(bios_install_dir), sys_dir,
+                         p->bios_install_directory);
+        else snprintf(bios_install_dir, sizeof(bios_install_dir), "%s", sys_dir);
+        fs_mkdir_p(bios_install_dir);
+        fs_join_path(bios_dst, sizeof(bios_dst), bios_install_dir, fn);
 
         SDL_LockMutex(g_shared_asset_mutex);
         log_add(LOG_LEVEL_INFO, "Checking BIOS/data asset %s: %s", p->id, fn);
@@ -357,7 +460,7 @@ static bool process_platform_downloads(PlatformInfo* p) {
                 bios_ok = false;
             } else {
                 log_add(LOG_LEVEL_INFO, "[EXTRACT] %s", fn);
-                if (!fs_extract_archive(bios_dst, sys_dir)) {
+                if (!fs_extract_archive(bios_dst, bios_install_dir)) {
                     log_add(LOG_LEVEL_ERROR, "[FAILED] Could not extract BIOS/data archive %s", fn);
                     bios_ok = false;
                 }

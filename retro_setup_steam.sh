@@ -52,8 +52,8 @@ export RETRO_SETUP_CONFIG="${RETRO_SETUP_CONFIG:-$RETRO_SETUP_CONFIG_DIR/retro_s
 
 install_selected_platforms() {
     selected_platforms_or_all
-    "$SCRIPT_DIR/setup_retroarch.sh"
     "$SCRIPT_DIR/download_bios.sh"
+    "$SCRIPT_DIR/setup_retroarch.sh"
     "$SCRIPT_DIR/download_roms.sh"
     "$SCRIPT_DIR/generate_playlists.sh"
 }

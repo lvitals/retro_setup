@@ -41,25 +41,34 @@ get_array_values() {
 download_bios_url() {
     local platform="$1"
     local url="$2"
-    local filename dest
+    local filename dest install_relative set_target ra_target
 
     filename="$(basename "${url%%\?*}")"
     [ -n "$filename" ] || filename="$platform.bios"
-    dest="$SET_BIOS_DIR/$filename"
+    install_relative="${PLATFORM_BIOS_INSTALL_DIRECTORY[$platform]:-}"
+    if [ -n "$install_relative" ] && [[ "$install_relative" != /* ]] && [[ "$install_relative" != *..* ]]; then
+        set_target="$SET_BIOS_DIR/$install_relative"
+        ra_target="$RA_SYSTEM_DIR/$install_relative"
+    else
+        set_target="$SET_BIOS_DIR"
+        ra_target="$RA_SYSTEM_DIR"
+    fi
+    mkdir -p "$set_target" "$ra_target"
+    dest="$set_target/$filename"
 
     echo "Downloading BIOS $platform: $filename"
     if wget "${WGET_OPTS[@]}" "$url" -O "$dest"; then
         case "$dest" in
             *.zip)
-                unzip -o "$dest" -d "$SET_BIOS_DIR"
-                unzip -o "$dest" -d "$RA_SYSTEM_DIR"
+                unzip -o "$dest" -d "$set_target"
+                unzip -o "$dest" -d "$ra_target"
                 ;;
             *.7z)
-                7z x "$dest" -o"$SET_BIOS_DIR" -y
-                7z x "$dest" -o"$RA_SYSTEM_DIR" -y
+                7z x "$dest" -o"$set_target" -y
+                7z x "$dest" -o"$ra_target" -y
                 ;;
             *)
-                cp "$dest" "$RA_SYSTEM_DIR/"
+                cp "$dest" "$ra_target/"
                 ;;
         esac
     else

@@ -226,6 +226,18 @@ void platform_data_load_custom(const char* config_path) {
                 add_or_update_platform(current_section_id, NULL, NULL, val, NULL, NULL, NULL, 0);
             } else if (strcmp(key, "core_name") == 0) {
                 add_or_update_platform(current_section_id, NULL, NULL, NULL, val, NULL, NULL, 0);
+            } else if (strcmp(key, "core_config_name") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) snprintf(g_platforms[idx].core_config_name,
+                                       sizeof(g_platforms[idx].core_config_name), "%s", val);
+            } else if (strcmp(key, "core_options") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) snprintf(g_platforms[idx].core_options,
+                                       sizeof(g_platforms[idx].core_options), "%s", val);
+            } else if (strcmp(key, "frontend_options") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) snprintf(g_platforms[idx].frontend_options,
+                                       sizeof(g_platforms[idx].frontend_options), "%s", val);
             } else if (strcmp(key, "fallback_core_file") == 0) {
                 int idx = get_platform_index_by_id(current_section_id);
                 if (idx >= 0) snprintf(g_platforms[idx].fallback_core_file,
@@ -238,6 +250,18 @@ void platform_data_load_custom(const char* config_path) {
                 int idx = get_platform_index_by_id(current_section_id);
                 if (idx >= 0) g_platforms[idx].fallback_core_without_bios =
                     strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0 || strcasecmp(val, "yes") == 0;
+            } else if (strcmp(key, "fallback_core_config_name") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) snprintf(g_platforms[idx].fallback_core_config_name,
+                                       sizeof(g_platforms[idx].fallback_core_config_name), "%s", val);
+            } else if (strcmp(key, "fallback_core_options") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) snprintf(g_platforms[idx].fallback_core_options,
+                                       sizeof(g_platforms[idx].fallback_core_options), "%s", val);
+            } else if (strcmp(key, "fallback_frontend_options") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) snprintf(g_platforms[idx].fallback_frontend_options,
+                                       sizeof(g_platforms[idx].fallback_frontend_options), "%s", val);
             } else if (strcmp(key, "extensions") == 0 || strcmp(key, "ext") == 0) {
                 add_or_update_platform(current_section_id, NULL, NULL, NULL, NULL, val, NULL, 0);
             } else if (strcmp(key, "bios_files") == 0 || strcmp(key, "bios") == 0) {
@@ -246,6 +270,14 @@ void platform_data_load_custom(const char* config_path) {
                 int idx = get_platform_index_by_id(current_section_id);
                 if (idx >= 0) snprintf(g_platforms[idx].bios_extensions,
                                        sizeof(g_platforms[idx].bios_extensions), "%s", val);
+            } else if (strcmp(key, "bios_copy_extensions") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) snprintf(g_platforms[idx].bios_copy_extensions,
+                                       sizeof(g_platforms[idx].bios_copy_extensions), "%s", val);
+            } else if (strcmp(key, "bios_install_directory") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) snprintf(g_platforms[idx].bios_install_directory,
+                                       sizeof(g_platforms[idx].bios_install_directory), "%s", val);
             } else if (strcmp(key, "bios_min_size") == 0) {
                 int idx = get_platform_index_by_id(current_section_id);
                 if (idx >= 0) g_platforms[idx].bios_min_size = strtoll(val, NULL, 10);

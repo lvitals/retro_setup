@@ -364,6 +364,42 @@ platform_bios_valid() {
     return 0
 }
 
+platform_selected_core() {
+    local platform="$1" primary="${PLATFORM_CORE[$platform]}"
+    if [ "${PLATFORM_FALLBACK_WITHOUT_BIOS[$platform]:-false}" = true ] &&
+       [ -n "${PLATFORM_FALLBACK_CORE[$platform]:-}" ] &&
+       ! platform_bios_valid "$platform" "$RA_DIR/system" &&
+       ! platform_bios_valid "$platform" "$SET_DIR/bios"; then
+        printf '%s\n' "${PLATFORM_FALLBACK_CORE[$platform]}"
+    else
+        printf '%s\n' "$primary"
+    fi
+}
+
+configure_selected_core_profiles() {
+    local platform selected core_file config_name config_dir options frontend_options fallback_file
+    for platform in "${SELECTED_PLATFORMS[@]}"; do
+        selected="$(platform_selected_core "$platform")"
+        IFS='|' read -r core_file _ <<< "$selected"
+        fallback_file="${PLATFORM_FALLBACK_CORE[$platform]%%|*}"
+        if [ -n "$fallback_file" ] && [ "$core_file" = "$fallback_file" ]; then
+            config_name="${PLATFORM_FALLBACK_CONFIG_NAME[$platform]:-}"
+            options="${PLATFORM_FALLBACK_CORE_OPTIONS[$platform]:-}"
+            frontend_options="${PLATFORM_FALLBACK_FRONTEND_OPTIONS[$platform]:-}"
+        else
+            config_name="${PLATFORM_CORE_CONFIG_NAME[$platform]:-}"
+            options="${PLATFORM_CORE_OPTIONS[$platform]:-}"
+            frontend_options="${PLATFORM_FRONTEND_OPTIONS[$platform]:-}"
+        fi
+        [ -n "$config_name" ] || continue
+        config_dir="$RA_DIR/config/$config_name"
+        mkdir -p "$config_dir"
+        printf '%s\n' "$options" | tr ';' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' > "$config_dir/$config_name.opt"
+        printf '%s\n' "$frontend_options" | tr ';' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' > "$config_dir/$config_name.cfg"
+        echo "Core profile configured: $platform -> $config_name"
+    done
+}
+
 check_selected_bios() {
     local dst_dir="${1:-$RA_DIR/system}"
     local missing=false
@@ -425,7 +461,7 @@ download_selected_core_assets() {
 
     local needs_info=false
     for platform in "${SELECTED_PLATFORMS[@]}"; do
-        IFS='|' read -r core_file core_name <<< "${PLATFORM_CORE[$platform]}"
+        IFS='|' read -r core_file core_name <<< "$(platform_selected_core "$platform")"
         info_file="${core_file%.so}.info"
         [ -f "$SET_DIR/info/$info_file" ] || needs_info=true
     done
@@ -446,7 +482,7 @@ download_selected_core_assets() {
     fi
 
     for platform in "${SELECTED_PLATFORMS[@]}"; do
-        IFS='|' read -r core_file core_name <<< "${PLATFORM_CORE[$platform]}"
+        IFS='|' read -r core_file core_name <<< "$(platform_selected_core "$platform")"
         if [ -f "$SET_DIR/cores/$core_file" ]; then
             echo "Local core ok: $platform -> $core_file"
             continue
