@@ -238,6 +238,10 @@ void platform_data_load_custom(const char* config_path) {
                 int idx = get_platform_index_by_id(current_section_id);
                 if (idx >= 0) snprintf(g_platforms[idx].frontend_options,
                                        sizeof(g_platforms[idx].frontend_options), "%s", val);
+            } else if (strcmp(key, "use_gamemode") == 0) {
+                int idx = get_platform_index_by_id(current_section_id);
+                if (idx >= 0) g_platforms[idx].use_gamemode =
+                    strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0 || strcasecmp(val, "yes") == 0;
             } else if (strcmp(key, "fallback_core_file") == 0) {
                 int idx = get_platform_index_by_id(current_section_id);
                 if (idx >= 0) snprintf(g_platforms[idx].fallback_core_file,

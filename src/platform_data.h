@@ -23,6 +23,7 @@ typedef struct {
     char core_config_name[128];
     char core_options[512];
     char frontend_options[512];
+    bool use_gamemode;
     char fallback_core_file[128];
     char fallback_core_name[128];
     bool fallback_core_without_bios;

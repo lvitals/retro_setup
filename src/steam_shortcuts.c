@@ -526,11 +526,18 @@ static void scan_roms_for_platform(const PlatformInfo* platform, const char* rom
         char exe_str[MAX_PATH_LEN];
         char launch_opts[MAX_PATH_LEN * 2];
 
+        bool enable_gamemode = use_gamemode && platform->use_gamemode;
         if (steam_runtime_bin && steam_runtime_bin[0] && steam_app_id && steam_app_id[0]) {
-            snprintf(exe_str, sizeof(exe_str), "\"%s\"", steam_runtime_bin);
-            snprintf(launch_opts, sizeof(launch_opts), "-applaunch %s -- -L \"%s\" \"%s\"",
-                     steam_app_id, core_path, full_path);
-        } else if (use_gamemode) {
+            if (enable_gamemode) {
+                snprintf(exe_str, sizeof(exe_str), "gamemoderun");
+                snprintf(launch_opts, sizeof(launch_opts), "\"%s\" -applaunch %s -- -L \"%s\" \"%s\"",
+                         steam_runtime_bin, steam_app_id, core_path, full_path);
+            } else {
+                snprintf(exe_str, sizeof(exe_str), "\"%s\"", steam_runtime_bin);
+                snprintf(launch_opts, sizeof(launch_opts), "-applaunch %s -- -L \"%s\" \"%s\"",
+                         steam_app_id, core_path, full_path);
+            }
+        } else if (enable_gamemode) {
             snprintf(exe_str, sizeof(exe_str), "gamemoderun");
             snprintf(launch_opts, sizeof(launch_opts), "\"%s\" -L \"%s\" \"%s\"", ra_bin, core_path, full_path);
         } else {
@@ -698,9 +705,12 @@ bool steam_shortcuts_sync(const char* ra_dir, const char* rom_base_dir) {
         }
 
         if (write_shortcuts_vdf(vdf_path, shortcuts, shortcut_count)) {
+            const char* launcher = use_steam_runtime
+                ? (use_gamemode ? "GameMode + Steam Runtime" : "Steam Runtime")
+                : (use_gamemode ? "GameMode" : "direct");
             log_add(LOG_LEVEL_INFO, "[STEAM] Synchronized shortcuts in %s (%d total shortcuts, %d added/updated, launcher: %s)",
                     vdf_path, shortcut_count, games_added_or_updated,
-                    use_steam_runtime ? "Steam Runtime" : (use_gamemode ? "GameMode" : "direct"));
+                    launcher);
             any_synced = true;
         }
 
