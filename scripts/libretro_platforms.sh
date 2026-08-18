@@ -64,7 +64,7 @@ declare -A PLATFORM_CORE=(
     [fds]="fceumm_libretro.so|Nintendo - NES / Famicom (FCEUmm)"
     [satellaview]="snes9x_libretro.so|Snes9x"
     [gamecube]="dolphin_libretro.so|Nintendo - GameCube / Wii (Dolphin)"
-    [ps1]="pcsx_rearmed_libretro.so|Sony - PlayStation (PCSX ReARMed)"
+    [ps1]="mednafen_psx_hw_libretro.so|Sony - PlayStation (Beetle PSX HW)"
     [ps2]="pcsx2_libretro.so|Sony - PlayStation 2 (LRPS2)"
     [mastersystem]="genesis_plus_gx_libretro.so|Sega - MS/GG/MD/CD (Genesis Plus GX)"
     [gamegear]="genesis_plus_gx_libretro.so|Sega - MS/GG/MD/CD (Genesis Plus GX)"
@@ -100,14 +100,17 @@ declare -A PLATFORM_FALLBACK_CORE=()
 declare -A PLATFORM_FALLBACK_WITHOUT_BIOS=()
 
 declare -A PLATFORM_CORE_CONFIG_NAME=(
+    [ps1]="Beetle PSX HW"
     [ps2]="LRPS2"
 )
 
 declare -A PLATFORM_CORE_OPTIONS=(
+    [ps1]='beetle_psx_hw_renderer = "vulkan"; beetle_psx_hw_renderer_software_fb = "disabled"; beetle_psx_hw_internal_resolution = "2x"; beetle_psx_hw_msaa = "2x"; beetle_psx_hw_fastboot = "enabled"; beetle_psx_hw_skip_bios = "enabled"; beetle_psx_hw_cpu_dynarec = "max performance"; beetle_psx_hw_dynarec_invalidate = "DMA Only"; beetle_psx_hw_depth = "32bpp"; beetle_psx_hw_dither_mode = "internal resolution"; beetle_psx_hw_filter = "bilinear"; beetle_psx_hw_pgxp_mode = "disabled"; beetle_psx_hw_cd_fastload = "2x (native)"; beetle_psx_hw_crop_overscan = "smart"; beetle_psx_hw_image_crop = "enabled"; beetle_psx_hw_image_offset = "enabled"; beetle_psx_hw_adaptive_smoothing = "disabled"'
     [ps2]='pcsx2_renderer = "Vulkan"; pcsx2_upscale_multiplier = "1x"; pcsx2_texture_filtering = "Bilinear (PS2)"; pcsx2_anisotropic_filtering = "Disabled"; pcsx2_blending_accuracy = "Basic"; pcsx2_fastboot = "enabled"; pcsx2_mtvu = "enabled"; pcsx2_instant_vu1 = "enabled"; pcsx2_ee_cycle_rate = "100% (Normal Speed)"; pcsx2_ee_cycle_skip = "Disabled"'
 )
 
 declare -A PLATFORM_FRONTEND_OPTIONS=(
+    [ps1]='video_driver = "vulkan"; video_threaded = "false"; video_vsync = "true"; video_smooth = "true"; aspect_ratio_index = "1"; video_aspect_ratio_auto = "false"; video_scale_integer = "false"; audio_latency = "80"; audio_sync = "true"; audio_rate_control = "true"; audio_rate_control_delta = "0.005"; audio_max_timing_skew = "0.05"; run_ahead_enabled = "false"; rewind_enable = "false"'
     [ps2]='video_driver = "vulkan"; video_threaded = "true"; video_vsync = "true"; audio_latency = "128"; audio_sync = "true"; run_ahead_enabled = "false"; rewind_enable = "false"'
 )
 
@@ -123,7 +126,7 @@ declare -A PLATFORM_BIOS_INSTALL_DIRECTORY=(
 
 declare -A PLATFORM_EXTENSIONS=(
     [nes]="nes" [snes]="sfc smc" [n64]="n64 z64 v64" [gb]="gb" [gbc]="gbc" [gba]="gba"
-    [fds]="fds" [satellaview]="bs" [gamecube]="iso gcm rvz" [ps1]="chd cue iso bin pbp"
+    [fds]="fds" [satellaview]="bs" [gamecube]="iso gcm rvz" [ps1]="chd cue iso bin pbp m3u toc ccd"
     [ps2]="elf iso ciso chd cso bin mdf nrg dump gz img m3u"
     [mastersystem]="sms" [gamegear]="gg" [megadrive]="md gen bin" [sega32x]="32x"
     [segacd]="chd cue iso" [sg1000]="sg" [saturn]="chd cue iso"
