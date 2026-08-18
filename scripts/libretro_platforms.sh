@@ -105,12 +105,12 @@ declare -A PLATFORM_CORE_CONFIG_NAME=(
 )
 
 declare -A PLATFORM_CORE_OPTIONS=(
-    [ps1]='beetle_psx_hw_renderer = "vulkan"; beetle_psx_hw_renderer_software_fb = "disabled"; beetle_psx_hw_internal_resolution = "2x"; beetle_psx_hw_msaa = "1x"; beetle_psx_hw_fastboot = "enabled"; beetle_psx_hw_skip_bios = "enabled"; beetle_psx_hw_cpu_dynarec = "max performance"; beetle_psx_hw_dynarec_invalidate = "DMA Only"; beetle_psx_hw_depth = "32bpp"; beetle_psx_hw_dither_mode = "internal resolution"; beetle_psx_hw_filter = "bilinear"; beetle_psx_hw_pgxp_mode = "disabled"; beetle_psx_hw_cd_fastload = "4x"; beetle_psx_hw_crop_overscan = "disabled"; beetle_psx_hw_image_crop = "disabled"; beetle_psx_hw_image_offset = "disabled"; beetle_psx_hw_adaptive_smoothing = "disabled"'
+    [ps1]='beetle_psx_hw_renderer = "vulkan"; beetle_psx_hw_renderer_software_fb = "disabled"; beetle_psx_hw_internal_resolution = "1x"; beetle_psx_hw_msaa = "1x"; beetle_psx_hw_fastboot = "enabled"; beetle_psx_hw_skip_bios = "enabled"; beetle_psx_hw_cpu_dynarec = "disabled"; beetle_psx_hw_depth = "16bpp"; beetle_psx_hw_dither_mode = "disabled"; beetle_psx_hw_filter = "bilinear"; beetle_psx_hw_pgxp_mode = "disabled"; beetle_psx_hw_cd_fastload = "2x (native)"; beetle_psx_hw_crop_overscan = "disabled"; beetle_psx_hw_image_crop = "disabled"; beetle_psx_hw_image_offset = "disabled"; beetle_psx_hw_adaptive_smoothing = "disabled"'
     [ps2]='pcsx2_renderer = "Vulkan"; pcsx2_upscale_multiplier = "1x"; pcsx2_texture_filtering = "Bilinear (PS2)"; pcsx2_anisotropic_filtering = "Disabled"; pcsx2_blending_accuracy = "Basic"; pcsx2_fastboot = "enabled"; pcsx2_mtvu = "enabled"; pcsx2_instant_vu1 = "enabled"; pcsx2_ee_cycle_rate = "100% (Normal Speed)"; pcsx2_ee_cycle_skip = "Disabled"'
 )
 
 declare -A PLATFORM_FRONTEND_OPTIONS=(
-    [ps1]='video_driver = "vulkan"; video_threaded = "true"; video_vsync = "true"; video_smooth = "true"; aspect_ratio_index = "1"; video_aspect_ratio_auto = "false"; video_scale_integer = "false"; audio_latency = "96"; audio_sync = "true"; audio_rate_control = "true"; audio_rate_control_delta = "0.005"; audio_max_timing_skew = "0.05"; run_ahead_enabled = "false"; rewind_enable = "false"'
+    [ps1]='video_driver = "vulkan"; video_threaded = "true"; video_vsync = "true"; video_smooth = "true"; video_max_swapchain_images = "3"; aspect_ratio_index = "1"; video_aspect_ratio_auto = "false"; video_scale_integer = "false"; audio_latency = "128"; audio_sync = "true"; audio_rate_control = "true"; audio_rate_control_delta = "0.005"; audio_max_timing_skew = "0.05"; audio_resampler_quality = "1"; run_ahead_enabled = "false"; rewind_enable = "false"'
     [ps2]='video_driver = "vulkan"; video_threaded = "true"; video_vsync = "true"; audio_latency = "128"; audio_sync = "true"; run_ahead_enabled = "false"; rewind_enable = "false"'
 )
 
