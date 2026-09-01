@@ -530,11 +530,11 @@ static void scan_roms_for_platform(const PlatformInfo* platform, const char* rom
         if (steam_runtime_bin && steam_runtime_bin[0] && steam_app_id && steam_app_id[0]) {
             if (enable_gamemode) {
                 snprintf(exe_str, sizeof(exe_str), "gamemoderun");
-                snprintf(launch_opts, sizeof(launch_opts), "\"%s\" -applaunch %s -- -L \"%s\" \"%s\"",
+                snprintf(launch_opts, sizeof(launch_opts), "\"%s\" -applaunch %s -L \"%s\" \"%s\"",
                          steam_runtime_bin, steam_app_id, core_path, full_path);
             } else {
                 snprintf(exe_str, sizeof(exe_str), "\"%s\"", steam_runtime_bin);
-                snprintf(launch_opts, sizeof(launch_opts), "-applaunch %s -- -L \"%s\" \"%s\"",
+                snprintf(launch_opts, sizeof(launch_opts), "-applaunch %s -L \"%s\" \"%s\"",
                          steam_app_id, core_path, full_path);
             }
         } else if (enable_gamemode) {
