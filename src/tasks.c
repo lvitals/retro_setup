@@ -777,6 +777,7 @@ const char* task_get_title(TaskType task) {
         case TASK_UNINSTALL: return "UNINSTALL PLATFORMS";
         case TASK_THUMBNAILS:return "DOWNLOAD THUMBNAILS";
         case TASK_UPDATE_COVERS: return "UPDATE ALL COVERS";
+        case TASK_UPDATE_CORES: return "UPDATE ALL CORES";
         case TASK_IMPLODE:   return "RESET CONFIGURATION";
         case TASK_STATUS:    return "SYSTEM STATUS";
         case TASK_INSTALLATION_DIAGNOSTIC: return "INSTALLATION DIAGNOSTIC";
@@ -1376,6 +1377,110 @@ static int do_task_update_all_covers(void) {
     return result;
 }
 
+typedef enum { CORE_UPDATE_FAILED = -1, CORE_UPDATE_UNCHANGED = 0, CORE_UPDATE_CHANGED = 1 } CoreUpdateResult;
+
+// Re-downloads the current libretro nightly build for one platform's core,
+// overwriting the installed .so even though process_platform_downloads()
+// would normally skip it as "already installed". Leaves the existing core
+// untouched if the download or extraction fails.
+static CoreUpdateResult update_core_for_platform(const PlatformInfo* p, const char* resolved_file,
+                                     const char* core_target) {
+    char core_base_url[MAX_URL_LEN];
+    if (!get_core_base_url(core_base_url, sizeof(core_base_url))) {
+        log_add(LOG_LEVEL_ERROR, "[UPDATE] No core base URL configured for this CPU architecture.");
+        return CORE_UPDATE_FAILED;
+    }
+
+    char cores_dir[MAX_PATH_LEN];
+    fs_join_path(cores_dir, sizeof(cores_dir), g_config.ra_dir, "cores");
+
+    char core_url[MAX_URL_LEN + 128 + sizeof("/.zip")];
+    snprintf(core_url, sizeof(core_url), "%s/%s.zip", core_base_url, resolved_file);
+
+    char core_zip[MAX_PATH_LEN], core_zip_name[300];
+    snprintf(core_zip_name, sizeof(core_zip_name), "%s.zip", resolved_file);
+    fs_join_path(core_zip, sizeof(core_zip), g_config.config_dir, core_zip_name);
+
+    long old_size = fs_file_size(core_target);
+
+    log_add(LOG_LEVEL_INFO, "[UPDATE] Checking latest build for %s: %s", p->name, resolved_file);
+    DownloadResult dl;
+    if (!download_file(core_url, core_zip, download_progress_cb, NULL,
+                       &g_task_mgr.cancel_requested, &g_task_mgr.pause_requested, &dl)) {
+        log_add(LOG_LEVEL_ERROR, "[UPDATE] Failed to download %s for %s: %s (HTTP status: %ld)",
+                resolved_file, p->name, dl.error, dl.http_status);
+        return CORE_UPDATE_FAILED;
+    }
+
+    if (!fs_extract_archive(core_zip, cores_dir)) {
+        log_add(LOG_LEVEL_ERROR, "[UPDATE] Failed to extract %s", core_zip_name);
+        fs_remove_file(core_zip);
+        return CORE_UPDATE_FAILED;
+    }
+    fs_remove_file(core_zip);
+
+    long new_size = fs_file_size(core_target);
+    bool changed = new_size != old_size;
+    if (!changed)
+        log_add(LOG_LEVEL_INFO, "[UPDATE] %s already up to date: %s", p->name, resolved_file);
+    else
+        log_add(LOG_LEVEL_INFO, "[UPDATE] Updated core for %s: %s (%ld -> %ld bytes)",
+                p->name, resolved_file, old_size, new_size);
+
+    // Keep the repo's local core cache (used by --sync-steam-shortcuts and
+    // offline installs) in sync with the freshly installed build.
+    char cache_dir[MAX_PATH_LEN], cache_file[MAX_PATH_LEN];
+    fs_join_path(cache_dir, sizeof(cache_dir), g_config.repo_dir, "cores");
+    fs_mkdir_p(cache_dir);
+    fs_join_path(cache_file, sizeof(cache_file), cache_dir, resolved_file);
+    fs_copy_file(core_target, cache_file);
+
+    return changed ? CORE_UPDATE_CHANGED : CORE_UPDATE_UNCHANGED;
+}
+
+// Updates the core of every platform that already has one installed,
+// regardless of which platforms are currently checked in the platform
+// selector -- mirrors do_task_update_all_covers()'s "operate on what's
+// actually installed" semantics. Cores shared by multiple platforms (e.g.
+// a primary core and its BIOS-less fallback) are only downloaded once.
+static int do_task_update_all_cores(void) {
+    log_add(LOG_LEVEL_INFO, "=== Starting Update All Cores ===");
+
+    char processed[TOTAL_PLATFORMS][128];
+    int processed_count = 0;
+    int updated = 0, unchanged = 0, failed = 0, skipped = 0;
+
+    for (int i = 0; i < TOTAL_PLATFORMS; i++) {
+        if (g_task_mgr.cancel_requested) break;
+
+        char resolved_file[128], resolved_name[128], core_target[MAX_PATH_LEN];
+        if (!platform_resolve_core(&g_platforms[i], g_config.ra_dir, resolved_file, sizeof(resolved_file),
+                                   resolved_name, sizeof(resolved_name), core_target, sizeof(core_target))) {
+            skipped++;
+            continue;
+        }
+
+        bool already_done = false;
+        for (int j = 0; j < processed_count; j++) {
+            if (!strcmp(processed[j], resolved_file)) { already_done = true; break; }
+        }
+        if (already_done) continue;
+
+        if (processed_count < TOTAL_PLATFORMS)
+            snprintf(processed[processed_count++], sizeof(processed[0]), "%s", resolved_file);
+
+        switch (update_core_for_platform(&g_platforms[i], resolved_file, core_target)) {
+            case CORE_UPDATE_CHANGED:   updated++; break;
+            case CORE_UPDATE_UNCHANGED: unchanged++; break;
+            case CORE_UPDATE_FAILED:    failed++; break;
+        }
+    }
+
+    log_add(LOG_LEVEL_INFO, "=== Update All Cores finished: %d updated, %d already up to date, %d failed, %d without a local core ===",
+            updated, unchanged, failed, skipped);
+    return failed > 0 ? 1 : 0;
+}
+
 static int do_task_implode(void) {
     log_add(LOG_LEVEL_INFO, "=== Starting Reset Configuration ===");
 
@@ -1579,6 +1684,7 @@ static int SDLCALL task_worker_thread(void* data) {
         case TASK_UNINSTALL: res = do_task_uninstall(); break;
         case TASK_THUMBNAILS:res = do_task_thumbnails(); break;
         case TASK_UPDATE_COVERS: res = do_task_update_all_covers(); break;
+        case TASK_UPDATE_CORES: res = do_task_update_all_cores(); break;
         case TASK_IMPLODE:   res = do_task_implode(); break;
         case TASK_STATUS:    res = do_task_status(); break;
         case TASK_INSTALLATION_DIAGNOSTIC: res = do_task_installation_diagnostic(); break;
@@ -1670,6 +1776,7 @@ int task_run_sync(TaskType task) {
         case TASK_UNINSTALL: res = do_task_uninstall(); break;
         case TASK_THUMBNAILS:res = do_task_thumbnails(); break;
         case TASK_UPDATE_COVERS: res = do_task_update_all_covers(); break;
+        case TASK_UPDATE_CORES: res = do_task_update_all_cores(); break;
         case TASK_IMPLODE:   res = do_task_implode(); break;
         case TASK_STATUS:    res = do_task_status(); break;
         case TASK_INSTALLATION_DIAGNOSTIC: res = do_task_installation_diagnostic(); break;

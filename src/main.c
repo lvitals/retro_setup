@@ -21,6 +21,7 @@ static void print_cli_help(const char* prog_name) {
     printf("  --uninstall   Uninstall selected platforms\n");
     printf("  --thumbnails  Download thumbnails for saved platforms\n");
     printf("  --update-covers  Download missing covers for ALL already installed platforms\n");
+    printf("  --update-cores  Update every already installed core to the latest libretro build\n");
     printf("  --implode     Reset local RetroArch configuration\n");
     printf("  --status      Show platforms and configuration files\n");
     printf("  --diagnostic  Audit installations and test configured URLs\n");
@@ -60,6 +61,9 @@ int main(int argc, char* argv[]) {
             force_cli = true;
         } else if (strcmp(argv[i], "--update-covers") == 0) {
             cli_task = TASK_UPDATE_COVERS;
+            force_cli = true;
+        } else if (strcmp(argv[i], "--update-cores") == 0) {
+            cli_task = TASK_UPDATE_CORES;
             force_cli = true;
         } else if (strcmp(argv[i], "--implode") == 0) {
             cli_task = TASK_IMPLODE;

@@ -44,6 +44,7 @@ static const MenuOption g_menu_options[] = {
     { TASK_UNINSTALL, "--uninstall", "UNINSTALL PLATFORMS",         "Remove ROMs, cores, playlists, and BIOS",                        { 231,  76,  60, 255 } },
     { TASK_THUMBNAILS,"--thumbnails", "DOWNLOAD THUMBNAILS",        "Download one boxart thumbnail for each installed ROM",             { 155,  89, 182, 255 } },
     { TASK_UPDATE_COVERS, "--update-covers", "UPDATE ALL COVERS",   "Refresh thumbnails/Steam covers for every already installed platform", { 41, 128, 185, 255 } },
+    { TASK_UPDATE_CORES, "--update-cores", "UPDATE ALL CORES",     "Update every already installed core to the latest libretro build", { 22, 160, 133, 255 } },
     { TASK_IMPLODE,   "--implode",   "RESET CONFIGURATION",         "Reset local configuration and clear generated files",            { 192,  57,  43, 255 } },
     { TASK_STATUS,    "--status",    "SYSTEM STATUS",               "View system distribution, mode, and saved settings",              { 241, 196,  15, 255 } },
     { TASK_INSTALLATION_DIAGNOSTIC, "--diagnostic", "INSTALLATION DIAGNOSTIC", "Audit platform health, obsolete installs, and configured URLs", { 26, 188, 156, 255 } }
@@ -121,6 +122,20 @@ static void draw_option_icon(SDL_Renderer* r, TaskType task, int x, int y, int s
             theme_draw_filled_rect(r, cx - 7, cy + 11, 22, 4, white);
             theme_draw_filled_rect(r, cx - 7, cy + 5, 4, 10, white);
             theme_draw_filled_rect(r, cx - 7, cy + 15, 10, 4, white);
+            break;
+        }
+        case TASK_UPDATE_CORES: { // Chip with Refresh Arrow Icon 🔄🧩
+            // Chip body with pins
+            theme_draw_filled_rect(r, cx - 10, cy - 10, 20, 20, white);
+            theme_draw_filled_rect(r, cx - 6, cy - 6, 12, 12, bg_color);
+            theme_draw_filled_rect(r, cx - 14, cy - 6, 4, 3, white);
+            theme_draw_filled_rect(r, cx - 14, cy + 3, 4, 3, white);
+            theme_draw_filled_rect(r, cx + 10, cy - 6, 4, 3, white);
+            theme_draw_filled_rect(r, cx + 10, cy + 3, 4, 3, white);
+            theme_draw_filled_rect(r, cx - 6, cy - 14, 3, 4, white);
+            theme_draw_filled_rect(r, cx + 3, cy - 14, 3, 4, white);
+            theme_draw_filled_rect(r, cx - 6, cy + 10, 3, 4, white);
+            theme_draw_filled_rect(r, cx + 3, cy + 10, 3, 4, white);
             break;
         }
         case TASK_IMPLODE: { // Bomb Icon 💣
