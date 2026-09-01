@@ -112,6 +112,7 @@ int main(int argc, char* argv[]) {
 
     if (sync_steam_shortcuts) {
         set_setup_mode(MODE_STEAM);
+        load_selected_platforms_config();
         return steam_shortcuts_sync(g_config.ra_dir, g_config.rom_dir) ? 0 : 1;
     }
 

@@ -13,7 +13,7 @@
 #include <stdint.h>
 #include <ctype.h>
 
-#define MAX_STEAM_SHORTCUTS 2048
+#define MAX_STEAM_SHORTCUTS 20000
 #define MAX_TAGS_PER_SHORTCUT 8
 
 typedef struct {
