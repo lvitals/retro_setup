@@ -20,6 +20,7 @@ static void print_cli_help(const char* prog_name) {
     printf("  --install     Install cores, BIOS & ROMs for selected platforms\n");
     printf("  --uninstall   Uninstall selected platforms\n");
     printf("  --thumbnails  Download thumbnails for saved platforms\n");
+    printf("  --update-covers  Download missing covers for ALL already installed platforms\n");
     printf("  --implode     Reset local RetroArch configuration\n");
     printf("  --status      Show platforms and configuration files\n");
     printf("  --diagnostic  Audit installations and test configured URLs\n");
@@ -56,6 +57,9 @@ int main(int argc, char* argv[]) {
             force_cli = true;
         } else if (strcmp(argv[i], "--thumbnails") == 0) {
             cli_task = TASK_THUMBNAILS;
+            force_cli = true;
+        } else if (strcmp(argv[i], "--update-covers") == 0) {
+            cli_task = TASK_UPDATE_COVERS;
             force_cli = true;
         } else if (strcmp(argv[i], "--implode") == 0) {
             cli_task = TASK_IMPLODE;

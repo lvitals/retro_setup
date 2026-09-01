@@ -592,6 +592,45 @@ static void scan_roms_for_platform(const PlatformInfo* platform, const char* rom
     closedir(d);
 }
 
+// Copies each shortcut's boxart into Steam's per-user grid folder so covers
+// show up in the Steam library (grid view) and Big Picture instead of the
+// generic placeholder. Steam looks up artwork for non-Steam games by appid:
+//   grid/<appid>p.png      -> portrait/vertical cover (library grid view)
+//   grid/<appid>.png       -> horizontal capsule (list/Big Picture grid)
+//   grid/<appid>_hero.png  -> wide banner behind the title on the game's detail page
+// Uses the same boxart image for all three since only one artwork source (the
+// libretro thumbnail boxart) is available; Steam scales/crops it to fit.
+static void sync_grid_covers(const char* cfg_dir, const SteamShortcut* shortcuts, int count) {
+    char grid_dir[MAX_PATH_LEN];
+    fs_join_path(grid_dir, sizeof(grid_dir), cfg_dir, "grid");
+    bool grid_dir_ready = false;
+
+    for (int i = 0; i < count; i++) {
+        const SteamShortcut* s = &shortcuts[i];
+        if (!s->keep || !s->is_retro_setup || !s->icon[0]) continue;
+        if (!fs_exists(s->icon)) continue;
+
+        if (!grid_dir_ready) {
+            if (!fs_mkdir_p(grid_dir)) continue;
+            grid_dir_ready = true;
+        }
+
+        uint32_t appid = s->appid ? s->appid : compute_steam_appid(s->exe, s->app_name);
+
+        char portrait_path[MAX_PATH_LEN + 16];
+        snprintf(portrait_path, sizeof(portrait_path), "%s/%up.png", grid_dir, appid);
+        if (!fs_exists(portrait_path)) fs_copy_file(s->icon, portrait_path);
+
+        char horizontal_path[MAX_PATH_LEN + 16];
+        snprintf(horizontal_path, sizeof(horizontal_path), "%s/%u.png", grid_dir, appid);
+        if (!fs_exists(horizontal_path)) fs_copy_file(s->icon, horizontal_path);
+
+        char hero_path[MAX_PATH_LEN + 24];
+        snprintf(hero_path, sizeof(hero_path), "%s/%u_hero.png", grid_dir, appid);
+        if (!fs_exists(hero_path)) fs_copy_file(s->icon, hero_path);
+    }
+}
+
 // Find all userdata directories and sync shortcuts.vdf in each
 bool steam_shortcuts_sync(const char* ra_dir, const char* rom_base_dir) {
     char home[MAX_PATH_LEN];
@@ -703,6 +742,8 @@ bool steam_shortcuts_sync(const char* ra_dir, const char* rom_base_dir) {
                                    shortcuts, &shortcut_count, MAX_STEAM_SHORTCUTS);
             games_added_or_updated += (shortcut_count - prev_count);
         }
+
+        sync_grid_covers(target_dirs[td], shortcuts, shortcut_count);
 
         if (write_shortcuts_vdf(vdf_path, shortcuts, shortcut_count)) {
             const char* launcher = use_steam_runtime

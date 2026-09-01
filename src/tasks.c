@@ -776,6 +776,7 @@ const char* task_get_title(TaskType task) {
         case TASK_INSTALL:   return "INSTALL PLATFORMS & ASSETS";
         case TASK_UNINSTALL: return "UNINSTALL PLATFORMS";
         case TASK_THUMBNAILS:return "DOWNLOAD THUMBNAILS";
+        case TASK_UPDATE_COVERS: return "UPDATE ALL COVERS";
         case TASK_IMPLODE:   return "RESET CONFIGURATION";
         case TASK_STATUS:    return "SYSTEM STATUS";
         case TASK_INSTALLATION_DIAGNOSTIC: return "INSTALLATION DIAGNOSTIC";
@@ -1338,8 +1339,41 @@ static int do_task_thumbnails(void) {
     snprintf(g_task_mgr.status_message, sizeof(g_task_mgr.status_message),
              "Thumbnails: %d downloaded, %d existing, %d unavailable, %d without ROMs, %d errors.",
              downloaded, skipped, missing, platforms_without_roms, failed);
+
+    if (g_config.mode == MODE_STEAM) {
+        /* The earlier playlist_generate_selected() call synced shortcuts before
+           these thumbnails existed, so icons/grid covers were skipped. Re-sync
+           now that boxart is on disk so Steam library covers get filled in. */
+        steam_shortcuts_sync(g_config.ra_dir, g_config.rom_dir);
+    }
+
     g_task_mgr.progress = 1.0f;
     return failed ? 1 : 0;
+}
+
+static bool platform_has_local_roms(int index) {
+    char dir[MAX_PATH_LEN];
+    fs_join_path(dir, sizeof(dir), g_config.rom_dir, g_platforms[index].id);
+    return fs_is_dir(dir);
+}
+
+// Downloads missing thumbnails/covers for every platform that already has ROMs
+// on disk, regardless of which platforms are currently checked in the platform
+// selector. Reuses do_task_thumbnails() (same progress reporting and Steam
+// grid-cover sync) by temporarily treating "installed" platforms as selected.
+static int do_task_update_all_covers(void) {
+    bool prev_selected[TOTAL_PLATFORMS];
+    for (int i = 0; i < TOTAL_PLATFORMS; i++) {
+        prev_selected[i] = g_platforms[i].selected;
+        g_platforms[i].selected = platform_has_local_roms(i);
+    }
+
+    int result = do_task_thumbnails();
+
+    for (int i = 0; i < TOTAL_PLATFORMS; i++) {
+        g_platforms[i].selected = prev_selected[i];
+    }
+    return result;
 }
 
 static int do_task_implode(void) {
@@ -1544,6 +1578,7 @@ static int SDLCALL task_worker_thread(void* data) {
         case TASK_INSTALL:   res = do_task_install(); break;
         case TASK_UNINSTALL: res = do_task_uninstall(); break;
         case TASK_THUMBNAILS:res = do_task_thumbnails(); break;
+        case TASK_UPDATE_COVERS: res = do_task_update_all_covers(); break;
         case TASK_IMPLODE:   res = do_task_implode(); break;
         case TASK_STATUS:    res = do_task_status(); break;
         case TASK_INSTALLATION_DIAGNOSTIC: res = do_task_installation_diagnostic(); break;
@@ -1634,6 +1669,7 @@ int task_run_sync(TaskType task) {
         case TASK_INSTALL:   res = do_task_install(); break;
         case TASK_UNINSTALL: res = do_task_uninstall(); break;
         case TASK_THUMBNAILS:res = do_task_thumbnails(); break;
+        case TASK_UPDATE_COVERS: res = do_task_update_all_covers(); break;
         case TASK_IMPLODE:   res = do_task_implode(); break;
         case TASK_STATUS:    res = do_task_status(); break;
         case TASK_INSTALLATION_DIAGNOSTIC: res = do_task_installation_diagnostic(); break;

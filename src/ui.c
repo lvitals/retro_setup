@@ -43,6 +43,7 @@ static const MenuOption g_menu_options[] = {
     { TASK_INSTALL,   "--install",   "INSTALL PLATFORMS & ASSETS",  "Download cores, BIOS, and ROMs for selected platforms",          { 230, 126,  34, 255 } },
     { TASK_UNINSTALL, "--uninstall", "UNINSTALL PLATFORMS",         "Remove ROMs, cores, playlists, and BIOS",                        { 231,  76,  60, 255 } },
     { TASK_THUMBNAILS,"--thumbnails", "DOWNLOAD THUMBNAILS",        "Download one boxart thumbnail for each installed ROM",             { 155,  89, 182, 255 } },
+    { TASK_UPDATE_COVERS, "--update-covers", "UPDATE ALL COVERS",   "Refresh thumbnails/Steam covers for every already installed platform", { 41, 128, 185, 255 } },
     { TASK_IMPLODE,   "--implode",   "RESET CONFIGURATION",         "Reset local configuration and clear generated files",            { 192,  57,  43, 255 } },
     { TASK_STATUS,    "--status",    "SYSTEM STATUS",               "View system distribution, mode, and saved settings",              { 241, 196,  15, 255 } },
     { TASK_INSTALLATION_DIAGNOSTIC, "--diagnostic", "INSTALLATION DIAGNOSTIC", "Audit platform health, obsolete installs, and configured URLs", { 26, 188, 156, 255 } }
@@ -111,6 +112,15 @@ static void draw_option_icon(SDL_Renderer* r, TaskType task, int x, int y, int s
             theme_draw_filled_rect(r, cx - 10, cy + 3, 7, 5, white);
             theme_draw_filled_rect(r, cx - 5, cy - 1, 9, 9, white);
             theme_draw_filled_rect(r, cx + 2, cy + 1, 8, 7, white);
+            break;
+        }
+        case TASK_UPDATE_COVERS: { // Refresh / Sync Arrows Icon 🔄
+            theme_draw_filled_rect(r, cx - 15, cy - 15, 22, 4, white);
+            theme_draw_filled_rect(r, cx + 3, cy - 15, 4, 10, white);
+            theme_draw_filled_rect(r, cx - 3, cy - 19, 10, 4, white);
+            theme_draw_filled_rect(r, cx - 7, cy + 11, 22, 4, white);
+            theme_draw_filled_rect(r, cx - 7, cy + 5, 4, 10, white);
+            theme_draw_filled_rect(r, cx - 7, cy + 15, 10, 4, white);
             break;
         }
         case TASK_IMPLODE: { // Bomb Icon 💣
@@ -768,7 +778,7 @@ static void draw_task_modal(void) {
     float stage_progress = (g_ui.modal_task == TASK_INSTALL || g_ui.modal_task == TASK_UNINSTALL)
                          ? (work_total > 0 ? (float)work_done / (float)work_total : 0.0f)
                          : task_get_progress();
-    float progress = (g_ui.modal_task == TASK_THUMBNAILS || downloads.total_bytes <= 0)
+    float progress = (g_ui.modal_task == TASK_THUMBNAILS || g_ui.modal_task == TASK_UPDATE_COVERS || downloads.total_bytes <= 0)
                    ? stage_progress
                    : byte_progress * 0.85f + stage_progress * 0.15f;
     if (!task_is_finished() && progress >= 1.0f) progress = 0.99f;
